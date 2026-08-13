@@ -1,0 +1,46 @@
+{
+  "name": "ISE Driver App — Isha Steels",
+  "short_name": "ISE Vehicles",
+  "description": "Isha Steels Enterprises Vehicle Operations Management",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#D51515",
+  "theme_color": "#D51515",
+  "lang": "hi-IN",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "apple touch icon"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "url": "./?view=dashboard",
+      "description": "Main dashboard"
+    },
+    {
+      "name": "Fuel Entry",
+      "url": "./?view=fuel",
+      "description": "Add fuel entry"
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "prefer_related_applications": false
+}

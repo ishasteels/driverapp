@@ -9,7 +9,7 @@
 var APP_CONFIG = {
 
   // ── GAS Web App URL (paste after deployment) ──────────────
-  GAS_URL: 'PASTE_YOUR_GAS_DEPLOYMENT_URL_HERE',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbyVgfTsMXwiF38-TB4CVUVL8UYk1sSKMycxXSY7EeuIfrlwDlGhT9rQPNVGTKz3uZor/exec',
   // Example: 'https://script.google.com/macros/s/AKfycbx.../exec'
 
   // ── App Identity ──────────────────────────────────────────

@@ -1,6 +1,6 @@
 // ISE Driver App — Service Worker
 // Version bump when files change: v2.0.0
-var CACHE_NAME = 'ise-driver-app-v2';
+var CACHE_NAME = 'ise-driver-app-v2.1';
 var SHELL = [
   './',
   './index.html',

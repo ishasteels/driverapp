@@ -9,14 +9,14 @@
 var APP_CONFIG = {
 
   // ── GAS Web App URL (paste after deployment) ──────────────
-  GAS_URL: 'https://script.google.com/macros/s/AKfycbyVgfTsMXwiF38-TB4CVUVL8UYk1sSKMycxXSY7EeuIfrlwDlGhT9rQPNVGTKz3uZor/exec',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbxjhGrWsS0GS0k7PlfOKWobKCtsY0Lhw1SMQ8T4neCv7K8xZDZ2nxF2fiZXXUnVS73s/exec',
   // Example: 'https://script.google.com/macros/s/AKfycbx.../exec'
 
   // ── App Identity ──────────────────────────────────────────
   APP_NAME:      'ISE Driver App',
   APP_SHORT:     'ISE Vehicles',
   COMPANY:       'Isha Steels Enterprises',
-  APP_VERSION:   '1.0.0',
+  APP_VERSION:   '2.0.0',
 
   // ── Brand Colors (from ISE logo) ─────────────────────────
   // Primary: ISE Red (logo red figure)
@@ -45,13 +45,13 @@ var APP_CONFIG = {
       'inspection', 'cleaning', 'fuel', 'trips', 'dispatch',
       'services', 'documents', 'reminders', 'expenses',
       'fastag', 'kmlogs', 'maintenance', 'penalties',
-      'rewards', 'auditlog', 'users'
+      'rewards', 'operations', 'auditlog', 'users'
     ],
     manager: [
       'dashboard', 'vehicles', 'drivers', 'attendance',
       'inspection', 'cleaning', 'fuel', 'trips', 'dispatch',
       'services', 'documents', 'reminders', 'expenses',
-      'fastag', 'kmlogs', 'maintenance', 'penalties', 'rewards'
+      'fastag', 'kmlogs', 'maintenance', 'penalties', 'rewards', 'operations'
     ],
     driver: [
       'my_dashboard', 'my_attendance', 'my_inspection',
@@ -79,6 +79,7 @@ var APP_CONFIG = {
     maintenance:   { label: 'Maintenance',   icon: '🛠️', color: '#E67E22' },
     penalties:     { label: 'Penalties',     icon: '⚠️', color: '#E74C3C' },
     rewards:       { label: 'Rewards',       icon: '🏆', color: '#F1C40F' },
+    operations:    { label: 'Control Room',  icon: '🎯', color: '#0F766E' },
     auditlog:      { label: 'Audit Log',     icon: '📝', color: '#7F8C8D' },
     users:         { label: 'Users',         icon: '👥', color: '#8E44AD' },
 

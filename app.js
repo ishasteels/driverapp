@@ -89,15 +89,31 @@ function _loadCachedData() {
 
 // ─── INIT ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {
-  var r = document.documentElement.style, c = APP_CONFIG.COLORS;
-  Object.keys(c).forEach(function(k) {
-    r.setProperty('--color-' + k.replace(/([A-Z])/g, '-$1').toLowerCase(), c[k]);
-  });
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function(e) { console.warn('SW:', e); });
+  try {
+    var r = document.documentElement.style, c = APP_CONFIG.COLORS;
+    Object.keys(c).forEach(function(k) {
+      r.setProperty('--color-' + k.replace(/([A-Z])/g, '-$1').toLowerCase(), c[k]);
+    });
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function(e) { console.warn('SW:', e); });
+    }
+    if (_loadSession() && _U) { _initApp(); } else { _showLogin(); }
+  } catch (e) {
+    _recoverToLogin(e);
   }
-  if (_loadSession() && _U) { _initApp(); } else { _showLogin(); }
 });
+
+window.addEventListener('error', function(e) { _recoverToLogin(e.error || e.message); });
+window.addEventListener('unhandledrejection', function(e) { _recoverToLogin(e.reason); });
+
+function _recoverToLogin(error) {
+  console.error('ISE app recovery:', error);
+  if (_refreshTimer) clearInterval(_refreshTimer);
+  _U = null; _TOKEN = null; _DATA = {};
+  _clearSession();
+  _hideLoader();
+  _showLogin();
+}
 
 function _showLogin() {
   document.getElementById('login-screen').style.display = '';
@@ -127,20 +143,24 @@ function _setLoginBusy(busy) {
 }
 
 function _initApp() {
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('app-shell').style.display    = '';
-  _qs('#user-name').textContent = _U.name;
-  _qs('#user-role').textContent = _cap(_U.role);
-  _buildNav();
-  if (_loadCachedData()) {
-    _showView(_U.role === 'driver' ? 'my_dashboard' : 'dashboard');
-    _refreshData();
-  } else {
-    _showLoader('Data load ho raha hai...');
-    _refreshData(function() { _showView(_U.role === 'driver' ? 'my_dashboard' : 'dashboard'); });
+  try {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-shell').style.display    = '';
+    _qs('#user-name').textContent = _U.name;
+    _qs('#user-role').textContent = _cap(_U.role);
+    _buildNav();
+    if (_loadCachedData()) {
+      _showView(_U.role === 'driver' ? 'my_dashboard' : 'dashboard');
+      _refreshData();
+    } else {
+      _showLoader('Data load ho raha hai...');
+      _refreshData(function() { _showView(_U.role === 'driver' ? 'my_dashboard' : 'dashboard'); });
+    }
+    if (_refreshTimer) clearInterval(_refreshTimer);
+    _refreshTimer = setInterval(_refreshData, APP_CONFIG.REFRESH_MINS * 60000);
+  } catch (e) {
+    _recoverToLogin(e);
   }
-  if (_refreshTimer) clearInterval(_refreshTimer);
-  _refreshTimer = setInterval(_refreshData, APP_CONFIG.REFRESH_MINS * 60000);
 }
 
 function _refreshData(cb) {

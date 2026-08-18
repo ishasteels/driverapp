@@ -159,8 +159,9 @@ var APP_CONFIG = {
   MATERIAL_TYPES: ['TMT Bars', 'MS Plates', 'Iron Rods', 'Steel Coils', 'Angle Iron', 'Billets', 'Other'],
 
   // ── Session ───────────────────────────────────────────────
-  SESSION_KEY:    'ise_driver_app_session',
-  DATA_KEY:       'ise_driver_app_data',
-  DATA_TS_KEY:    'ise_driver_app_ts',
+  // Versioned keys prevent an older browser session/cache from breaking a new app release.
+  SESSION_KEY:    'ise_driver_app_session_v2',
+  DATA_KEY:       'ise_driver_app_data_v2',
+  DATA_TS_KEY:    'ise_driver_app_ts_v2',
   REFRESH_MINS:   5   // auto-refresh every 5 minutes
 };

@@ -1,6 +1,6 @@
 // ISE Driver App — Service Worker
-// Version bump when files change: v1.0.0
-var CACHE_NAME = 'ise-driver-app-v1';
+// Version bump when files change: v2.0.0
+var CACHE_NAME = 'ise-driver-app-v2';
 var SHELL = [
   './',
   './index.html',
@@ -8,8 +8,7 @@ var SHELL = [
   './app.js',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png',
-  './icon-180.png'
+  './icon-512.png'
 ];
 
 self.addEventListener('install', function(e) {

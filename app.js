@@ -30,7 +30,10 @@ function _api(action, data, onOk, onErr) {
     try { delete window[cbName]; } catch(e) {}
     var s = document.getElementById('_s_' + cbName);
     if (s) s.remove();
-    if (r && r.success === false && r.error && r.error.indexOf('Login') !== -1) { _signOut(); return; }
+    if (r && r.success === false && r.error && /login|session|unauthori[sz]ed/i.test(r.error)) {
+      _toast('Session expire ho gayi. Dobara login karein.', 'warning');
+      _signOut(); return;
+    }
     if (onOk) onOk(r);
   };
   timeout = setTimeout(function() {
@@ -154,6 +157,7 @@ function _refreshData(cb) {
 
 function _signOut() {
   if (_refreshTimer) clearInterval(_refreshTimer);
+  if (_TOKEN) _api('logout', {}, function(){}, function(){});
   _U = null; _TOKEN = null; _DATA = {};
   _clearSession(); _showLogin();
 }
@@ -165,7 +169,7 @@ function _buildNav() {
   nav.innerHTML = '';
   var navItems = role === 'driver'
     ? ['my_dashboard', 'my_attendance', 'my_inspection', 'my_fuel', 'my_trips']
-    : ['dashboard', 'vehicles', 'drivers', 'fuel', 'services'];
+    : ['dashboard', 'operations', 'vehicles', 'fuel', 'services'];
   navItems.forEach(function(key) {
     var m = APP_CONFIG.MODULES[key]; if (!m) return;
     var btn = document.createElement('button');
@@ -177,6 +181,10 @@ function _buildNav() {
 }
 
 function _showView(viewKey, params) {
+  if (!_canAccessView(viewKey)) {
+    _toast('Is section ka access aapke role ke liye available nahi hai.', 'danger');
+    return;
+  }
   _VIEW = viewKey; _searchQuery = ''; _filterState = {};
   document.querySelectorAll('.nav-btn').forEach(function(b) { b.classList.remove('active'); });
   var nb = document.getElementById('nav-' + viewKey);
@@ -186,6 +194,7 @@ function _showView(viewKey, params) {
   main.scrollTop = 0;
   switch(viewKey) {
     case 'dashboard':      _renderDashboard(main); break;
+    case 'operations':     _renderOperations(main); break;
     case 'my_dashboard':   _renderMyDashboard(main); break;
     case 'vehicles':       _renderVehicles(main); break;
     case 'vehicle_detail': _renderVehicleDetail(main, params); break;
@@ -222,6 +231,15 @@ function _showView(viewKey, params) {
     case 'settings':       _renderSettings(main); break;
     default: main.innerHTML = _emptyState('🚧', 'Coming Soon', 'Yeh view jald aa raha hai');
   }
+}
+
+function _canAccessView(viewKey) {
+  var internalViews = ['vehicle_detail', 'driver_detail', 'vehicle_form', 'driver_form',
+    'service_form', 'fastag_form', 'settings'];
+  var operationalForms = ['my_fuel', 'my_trips', 'my_kmlogs', 'my_expenses'];
+  if (internalViews.indexOf(viewKey) >= 0) return _U && _U.role !== 'driver';
+  if (operationalForms.indexOf(viewKey) >= 0) return !!_U;
+  return !!(_U && (APP_CONFIG.ROLE_MODULES[_U.role] || []).indexOf(viewKey) >= 0);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -327,6 +345,58 @@ function _renderDashboard(el) {
   setTimeout(function() { _drawFuelChart(trend); }, 50);
 }
 
+// ── OPERATIONS CONTROL ROOM ─────────────────────────────────
+function _renderOperations(el) {
+  var today = _today();
+  var vehicles = _DATA.vehicles || [];
+  var attendance = (_DATA.attendance || []).filter(function(a){ return a.Date === today; });
+  var inspections = (_DATA.inspections || []).filter(function(i){ return i.Date === today; });
+  var trips = (_DATA.trips || []).filter(function(t){ return t.Date === today; });
+  var reminders = (_DATA.reminders || []).filter(function(r){ return r.Status === 'Pending'; });
+  var services = (_DATA.services || []).filter(function(s){ return s.Status !== 'Completed'; });
+  var checkedIn = attendance.filter(function(a){ return a.InTime && !a.OutTime; }).length;
+  var missingInspection = vehicles.filter(function(v){
+    return v.Status === 'Active' && !inspections.some(function(i){ return i.VehicleID === v.VehicleID; });
+  });
+  var urgentDocs = vehicles.filter(function(v){
+    return _daysTo(v.InsuranceExpiry) <= 15 || _daysTo(v.PUCExpiry) <= 7;
+  });
+
+  el.innerHTML = _pageHeader('🎯 Control Room',
+    '<button class="btn-sm btn-ghost" onclick="_refreshData()">↻ Refresh</button>') +
+    '<div class="content-pad">' +
+      '<div class="control-hero"><div><span class="eyebrow">LIVE OPERATIONS · ' + today + '</span>' +
+        '<h3>' + checkedIn + ' drivers currently on duty</h3><p>Priorities ko resolve karke fleet ko moving rakhein.</p></div>' +
+        '<button class="control-cta" onclick="_showView(\'dispatch\')">Dispatch Board →</button></div>' +
+      '<div class="hero-stats">' +
+        _heroStat('📋', attendance.length, 'Attendance', '#27AE60') +
+        _heroStat('🔍', inspections.length, 'Inspections', '#D51515') +
+        _heroStat('🗺️', trips.length, 'Trips today', '#2980B9') +
+        _heroStat('⚠️', reminders.length + services.length, 'Open alerts', '#E67E22') +
+      '</div>' +
+      _sectionHeader('Needs attention') +
+      _attentionCard('🔍', 'Pre-trip inspection pending', missingInspection.length,
+        missingInspection.length ? missingInspection.slice(0, 3).map(function(v){ return v.VehicleNo; }).join(' · ') : 'All active vehicles checked',
+        missingInspection.length ? 'inspection' : null) +
+      _attentionCard('📄', 'Document expiry risk', urgentDocs.length,
+        urgentDocs.length ? urgentDocs.slice(0, 3).map(function(v){ return v.VehicleNo; }).join(' · ') : 'No critical expiry in next 7–15 days',
+        urgentDocs.length ? 'documents' : null) +
+      _attentionCard('🔧', 'Services awaiting closure', services.length,
+        services.length ? services.slice(0, 3).map(function(s){ return _vnum(s.VehicleID); }).join(' · ') : 'No open service jobs',
+        services.length ? 'services' : null) +
+      _sectionHeader('Today\'s trip activity') +
+      (trips.length ? _table(['Vehicle', 'Route', 'KM', 'Material'], trips.slice(-8).reverse().map(function(t){
+        return [_vnum(t.VehicleID), (t.FromLocation || '—') + ' → ' + (t.ToLocation || '—'), t.TotalKM || '—', t.MaterialType || '—'];
+      })) : _emptyState('🗺️', 'No trips logged today', 'Dispatch start karte hi yahan live activity dikh jayegi.')) +
+    '</div>';
+}
+
+function _attentionCard(icon, title, count, detail, view) {
+  return '<button class="attention-card"' + (view ? ' onclick="_showView(\'' + view + '\')"' : '') + '>' +
+    '<span class="attention-icon">' + icon + '</span><span class="attention-copy"><b>' + title + '</b><small>' + detail + '</small></span>' +
+    '<span class="attention-count">' + count + (view ? ' ›' : '') + '</span></button>';
+}
+
 function _last7DaysFuel(fuel) {
   var days = [], today = new Date();
   for (var i = 6; i >= 0; i--) {
@@ -387,7 +457,7 @@ function _renderMyDashboard(el) {
 
   // My vehicle card — rich version
   (veh
-    ? '<div class="my-vehicle-card" onclick="_showView(\'vehicles\')">' +
+    ? '<div class="my-vehicle-card">' +
         '<div class="mvc-left">' +
           '<div class="mvc-plate">' + (veh.VehicleNo || 'N/A') + '</div>' +
           '<div class="mvc-brand">' + (veh.Brand||'') + ' ' + (veh.Model||'') + '</div>' +
@@ -408,6 +478,8 @@ function _renderMyDashboard(el) {
     '<div class="ms-item"><div class="ms-val">' + ins.length + '</div><div class="ms-label">Inspections</div></div>' +
     '<div class="ms-item"><div class="ms-val">' + (_DATA.myTrips||[]).length + '</div><div class="ms-label">Trips</div></div>' +
   '</div>' +
+
+  _renderDriverTodayChecklist(att, ins, _DATA.myCleaning || [], fuel, _DATA.myTrips || []) +
 
   // Pending alerts for driver
   (penalties.filter(function(p){ return p.Status === 'Pending'; }).length
@@ -449,6 +521,24 @@ function _renderMyDashboard(el) {
     })) +
 
   '</div>';
+}
+
+function _renderDriverTodayChecklist(att, ins, cleaning, fuel, trips) {
+  var today = _today();
+  var steps = [
+    { icon: '📋', label: 'Attendance', done: att.some(function(x){ return x.Date === today && x.InTime; }), view: 'my_attendance', action: 'openAttModal()' },
+    { icon: '🔍', label: 'Inspection', done: ins.some(function(x){ return x.Date === today; }), view: 'my_inspection' },
+    { icon: '🧽', label: 'Cleaning', done: cleaning.some(function(x){ return x.Date === today; }), view: 'my_cleaning' },
+    { icon: '🗺️', label: 'Trip Log', done: trips.some(function(x){ return x.Date === today; }), view: 'my_trips' },
+    { icon: '⛽', label: 'Fuel / KM', done: fuel.some(function(x){ return x.Date === today; }), view: 'my_fuel' }
+  ];
+  var completed = steps.filter(function(x){ return x.done; }).length;
+  return _sectionHeader('Aaj ka kaam · ' + completed + '/' + steps.length + ' complete') +
+    '<div class="daily-checklist">' + steps.map(function(step) {
+      var run = step.action || "_showView('" + step.view + "')";
+      return '<button class="daily-step ' + (step.done ? 'is-done' : '') + '" onclick="' + run + '">' +
+        '<span>' + step.icon + '</span><b>' + step.label + '</b><em>' + (step.done ? 'Done ✓' : 'Pending ›') + '</em></button>';
+    }).join('') + '</div>';
 }
 
 // Mini attendance calendar (dots)
@@ -1707,14 +1797,18 @@ function submitFuel() {
     kmReading: parseFloat(_v('fuel-km'))||0, previousKM: parseFloat(_v('fuel-prevkm'))||0,
     fuelQty: parseFloat(_v('fuel-qty'))||0, amount: parseFloat(_v('fuel-amt'))||0, pumpName: _v('fuel-pump') };
   if (!data.vehicleID || !data.fuelQty || !data.amount) { _toast('Vehicle ID, Qty aur Amount zaroori hai.', 'danger'); return; }
+  if (data.kmReading && data.previousKM && data.kmReading < data.previousKM) { _toast('Current KM, previous KM se kam nahi ho sakta.', 'danger'); return; }
   _submitForm('addFuel', data, '⛽ Fuel entry saved!');
 }
 
 function submitTrip() {
-  _submitForm('addTrip', { date: _v('trp-date')||_today(), vehicleID: _v('trp-vid'),
+  var data = { date: _v('trp-date')||_today(), vehicleID: _v('trp-vid'),
     fromLocation: _v('trp-from'), toLocation: _v('trp-to'), materialType: _v('trp-mat'),
     weight: parseFloat(_v('trp-wt'))||0, startKM: parseFloat(_v('trp-skm'))||0,
-    endKM: parseFloat(_v('trp-ekm'))||0, remarks: _v('trp-rem') }, '🗺️ Trip logged!');
+    endKM: parseFloat(_v('trp-ekm'))||0, remarks: _v('trp-rem') };
+  if (!data.vehicleID || !data.fromLocation || !data.toLocation) { _toast('Vehicle, From aur To location zaroori hain.', 'danger'); return; }
+  if (data.endKM && data.endKM < data.startKM) { _toast('End KM, Start KM se kam nahi ho sakta.', 'danger'); return; }
+  _submitForm('addTrip', data, '🗺️ Trip logged!');
 }
 
 function submitService() {
@@ -1732,8 +1826,10 @@ function submitExpense() {
 }
 
 function submitKMLog() {
-  _submitForm('addKMLog', { date: _v('km-date')||_today(), vehicleID: _v('km-vid'),
-    odometer: parseFloat(_v('km-odo'))||0, remarks: _v('km-rem') }, '📏 KM entry saved!');
+  var data = { date: _v('km-date')||_today(), vehicleID: _v('km-vid'),
+    odometer: parseFloat(_v('km-odo'))||0, remarks: _v('km-rem') };
+  if (!data.vehicleID || !data.odometer) { _toast('Vehicle aur odometer reading zaroori hai.', 'danger'); return; }
+  _submitForm('addKMLog', data, '📏 KM entry saved!');
 }
 
 function submitFastag() {

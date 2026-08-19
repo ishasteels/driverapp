@@ -1,2070 +1,2932 @@
-// ============================================================
-// ISE DRIVER APP — app.js  v2.0
-// Isha Steels Enterprises — Vehicle Operations Management
-// Depends on: appconfig.js (load BEFORE this file)
-// ============================================================
+// ════════════════════════════════════════════════════════════════════════════
+// app.js — ISE Driver App v3.0
+// Core: session, GAS bridge, date utils, CSV download
+// Load order: appconfig.js → app.js → index.html inline script
+// ════════════════════════════════════════════════════════════════════════════
+(function(W){
 'use strict';
 
-// ─── GLOBAL STATE ────────────────────────────────────────────
-var _U            = null;
-var _TOKEN        = null;
-var _DATA         = {};
-var _cbIdx        = 0;
-var _VIEW         = null;
-var _refreshTimer = null;
-var _searchQuery  = '';
-var _filterState  = {};
+var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+var DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+var CFG=W.APP_CONFIG||{};
 
-// ─── JSONP API ───────────────────────────────────────────────
-function _api(action, data, onOk, onErr) {
-  var API = APP_CONFIG.GAS_URL;
-  if (!API || API.indexOf('PASTE') !== -1) {
-    _toast('⚠️ GAS URL configure nahi hai', 'danger');
-    if (onErr) onErr({ message: 'GAS_URL not set' });
-    return;
-  }
-  var cbName = '_gcb' + (++_cbIdx);
-  var timeout;
-  window[cbName] = function(r) {
-    clearTimeout(timeout);
-    try { delete window[cbName]; } catch(e) {}
-    var s = document.getElementById('_s_' + cbName);
-    if (s) s.remove();
-    if (r && r.success === false && r.error && /login|session|unauthori[sz]ed/i.test(r.error)) {
-      _toast('Session expire ho gayi. Dobara login karein.', 'warning');
-      _signOut(); return;
-    }
-    if (onOk) onOk(r);
+// ── Date helpers ─────────────────────────────────────────────────────────────
+W._today=function(){return new Date().toISOString().slice(0,10);};
+W._currMonth=function(){return new Date().toISOString().slice(0,7);};
+W._daysAgo=function(n){var d=new Date();d.setDate(d.getDate()-n);return d.toISOString().slice(0,10);};
+
+W._parseAnyDate=function(s){
+  if(!s)return null;
+  var str=String(s).trim();
+  if(!str||str==='-'||str==='undefined'||str==='null')return null;
+  var gm=str.match(/([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if(gm){var mo={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+    var d=new Date(+gm[3],mo[gm[1]]||0,+gm[2],+gm[4],+gm[5],+gm[6]);return isNaN(d)?null:d;}
+  var ddmm=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::\d{2})?)?/);
+  if(ddmm){var d2=new Date(+ddmm[3],+ddmm[2]-1,+ddmm[1],+(ddmm[4]||0),+(ddmm[5]||0));return isNaN(d2)?null:d2;}
+  var norm=str.length===10?str+'T00:00:00':str.replace(' ','T');
+  var d3=new Date(norm);return isNaN(d3)?null:d3;
+};
+
+W._fmtDate=function(s){
+  if(!s||s==='-')return'—';
+  try{var d=W._parseAnyDate(s);if(!d)return String(s).slice(0,10);
+    return d.getDate()+' '+MN[d.getMonth()]+' '+d.getFullYear();}catch(e){return s;}
+};
+W._fmtDateTime=function(s){
+  if(!s||s==='-')return'—';
+  try{var d=W._parseAnyDate(s);if(!d)return String(s).slice(0,16);
+    var h=d.getHours(),m=d.getMinutes();var ap=h>=12?'PM':'AM',h12=h%12||12;
+    return d.getDate()+' '+MN[d.getMonth()]+' '+d.getFullYear()+' '+h12+':'+(m<10?'0':'')+m+' '+ap;}catch(e){return s;}
+};
+W._fmtTime=function(s){
+  if(!s)return'—';var str=String(s).trim();
+  var m=str.match(/(\d{1,2}):(\d{2})/);if(!m)return str;
+  var h=+m[1],mn=+m[2],ap=h>=12?'PM':'AM',h12=h%12||h;
+  return h12+':'+(mn<10?'0':'')+mn+' '+ap;
+};
+W._daysLeft=function(dateStr){
+  if(!dateStr)return 9999;
+  return Math.ceil((new Date(dateStr+'T00:00:00')-new Date())/86400000);
+};
+W._dayName=function(dateStr){
+  try{return new Date(dateStr+'T00:00:00').toLocaleDateString('en-IN',{weekday:'long'});}catch(e){return'';}
+};
+
+// ── String helpers ────────────────────────────────────────────────────────────
+W._esc=function(s){
+  if(s===null||s===undefined)return'';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+};
+W._commaNum=function(n){return(+n||0).toLocaleString('en-IN');};
+W._inr=function(n){return'₹'+W._commaNum(n);};
+W._initials=function(name){
+  var p=String(name||'').trim().split(' ');
+  return p.length>=2?p[0][0].toUpperCase()+p[1][0].toUpperCase():(p[0]||'?')[0].toUpperCase();
+};
+W._avatarColor=function(name){
+  var colors=['#D51515','#2980B9','#8E44AD','#27AE60','#E67E22','#0D9488','#E74C3C','#16A085'];
+  var i=String(name||'').split('').reduce(function(a,c){return a+c.charCodeAt(0);},0);
+  return colors[i%colors.length];
+};
+
+// ── Session ───────────────────────────────────────────────────────────────────
+var SK=(CFG.SESSION_KEY)||'ise_session_v3';
+var SH=(CFG.SESSION_HOURS)||12;
+W._saveSession=function(u,t){try{localStorage.setItem(SK,JSON.stringify({user:u,token:t,exp:Date.now()+SH*3600000}));}catch(e){}};
+W._loadSession=function(){try{var r=localStorage.getItem(SK);if(!r)return null;var s=JSON.parse(r);return(s&&s.user&&Date.now()<(s.exp||0))?s:null;}catch(e){return null;}};
+W._clearSession=function(){try{localStorage.removeItem(SK);}catch(e){}};
+
+// ── GAS JSONP Bridge ──────────────────────────────────────────────────────────
+W._gas=function(fn,args,onOk,onErr,_retry){
+  if(typeof W._lbShow==='function')W._lbShow();
+  var GU=W.GAS_URL||(CFG.GAS_URL)||'';
+  var sess=W._loadSession();
+  var sa=(args||[]).concat([sess?sess.user:null]);
+  var cb='_cb'+Date.now()+Math.floor(Math.random()*9999);
+  var pl=encodeURIComponent(JSON.stringify({action:fn,args:sa}));
+  var url=GU+'?callback='+cb+'&payload='+pl;
+  var done=false,sc=document.createElement('script'),rt=_retry||0;
+  var tm=setTimeout(function(){
+    if(done)return;done=true;
+    if(typeof W._lbHide==='function')W._lbHide();
+    sc.remove();delete W[cb];
+    if(rt<1){setTimeout(function(){W._gas(fn,args,onOk,onErr,1);},1500);return;}
+    if(onErr)onErr({message:'Network error. Check connection.'});
+    else if(typeof W._toast==='function')W._toast('Connection error — please retry','err');
+  },CFG.DEFAULT_TIMEOUT||30000);
+  W[cb]=function(data){
+    if(done)return;done=true;
+    if(typeof W._lbHide==='function')W._lbHide();
+    clearTimeout(tm);sc.remove();delete W[cb];
+    if(data&&data.success===false&&data.error){
+      if(data.error.indexOf('Session expire')>=0||data.error.indexOf('login')>=0){
+        W._clearSession();location.reload();return;
+      }
+      if(onErr)onErr({message:data.error});
+      else if(typeof W._toast==='function')W._toast('Error: '+data.error,'err');
+    }else{if(onOk)onOk(data);}
   };
-  timeout = setTimeout(function() {
-    try { delete window[cbName]; } catch(e) {}
-    var s = document.getElementById('_s_' + cbName);
-    if (s) s.remove();
-    if (onErr) onErr({ message: 'Request timeout. Internet check karo.' });
-  }, 25000);
-  var url = API + '?callback=' + cbName + '&payload=' +
-    encodeURIComponent(JSON.stringify({ action: action, data: data || {}, token: _TOKEN || '' }));
-  var sc = document.createElement('script');
-  sc.id = '_s_' + cbName; sc.src = url;
-  sc.onerror = function() { clearTimeout(timeout); if (onErr) onErr({ message: 'Network error' }); };
-  document.body.appendChild(sc);
+  sc.onerror=function(){if(done)return;done=true;clearTimeout(tm);sc.remove();delete W[cb];
+    if(onErr)onErr({message:'Network error.'});};
+  sc.src=url;document.head.appendChild(sc);
+};
+
+// Login (no session arg needed)
+W._gasLogin=function(email,pass,onOk,onErr){
+  var GU=W.GAS_URL||(CFG.GAS_URL)||'';
+  var cb='_cb'+Date.now()+Math.floor(Math.random()*9999);
+  var pl=encodeURIComponent(JSON.stringify({action:'login',args:[email,pass]}));
+  var url=GU+'?callback='+cb+'&payload='+pl;
+  var done=false,sc=document.createElement('script');
+  var tm=setTimeout(function(){
+    if(done)return;done=true;sc.remove();delete W[cb];
+    if(onErr)onErr({message:'Server timeout. Check connection.'});
+  },30000);
+  W[cb]=function(data){
+    if(done)return;done=true;clearTimeout(tm);sc.remove();delete W[cb];
+    if(data&&data.success===false&&data.error){if(onErr)onErr({message:data.error});}
+    else{if(onOk)onOk(data);}
+  };
+  sc.onerror=function(){if(done)return;done=true;clearTimeout(tm);sc.remove();delete W[cb];
+    if(onErr)onErr({message:'Network error.'});};
+  sc.src=url;document.head.appendChild(sc);
+};
+
+// ── CSV Download ──────────────────────────────────────────────────────────────
+W._downloadCSV=function(filename,rows){
+  var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c===null||c===undefined?'':c).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
+  var a=document.createElement('a');a.href='data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(csv);
+  a.download=filename;a.style.display='none';document.body.appendChild(a);a.click();document.body.removeChild(a);
+};
+
+// ── Geo ───────────────────────────────────────────────────────────────────────
+W._getGPS=function(onOk,onErr){
+  if(!navigator.geolocation){if(onErr)onErr('GPS not supported');return;}
+  navigator.geolocation.getCurrentPosition(
+    function(p){onOk(p.coords.latitude.toFixed(6)+','+p.coords.longitude.toFixed(6));},
+    function(e){if(onErr)onErr(e.message||'GPS error');},
+    {enableHighAccuracy:true,timeout:12000,maximumAge:30000}
+  );
+};
+
+})(window);
+
+// ════════════════════════════════════════════════════════════════════════════
+// APP STATE + LOGIN + ROUTING
+// ════════════════════════════════════════════════════════════════════════════
+var _U=null;       // current user object
+var _D={};         // bulk data cache
+var _curV='';      // current view
+var _pollTimer=null;
+
+// ── Data access helpers ───────────────────────────────────────────────────────
+function _drivers()  {return _D.drivers||[];}
+function _vehicles() {return _D.vehicles||[];}
+function _driverByID(id){return _drivers().filter(function(d){return String(d.DriverID||'')===String(id);})[0]||null;}
+function _vehicleByID(id){return _vehicles().filter(function(v){return String(v.VehicleID||'')===String(id);})[0]||null;}
+function _vehicleByNo(no){return _vehicles().filter(function(v){return String(v.VehicleNo||'').toLowerCase()===String(no).toLowerCase();})[0]||null;}
+function _driverName(id){var d=_driverByID(id);return d?String(d.Name||id):id;}
+function _vehicleNo(id){var v=_vehicleByID(id);return v?String(v.VehicleNo||id):id;}
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+function doLogin(){
+  var email=document.getElementById('inp-email').value.trim();
+  var pass=document.getElementById('inp-pass').value;
+  _hideLoginErr();
+  if(!email){_showLoginErr('Email daalo.');return;}
+  if(!pass){_showLoginErr('Password daalo.');return;}
+  _setLoginBusy(true);
+  _gasLogin(email,pass,function(res){
+    _setLoginBusy(false);
+    if(!res||!res.success||!res.user){_showLoginErr((res&&res.error)||'Login failed.');return;}
+    var u=res.user;
+    _saveSession(u,'tok_'+Date.now());
+    _bootApp(u);
+  },function(err){
+    _setLoginBusy(false);
+    _showLoginErr(err.message||'Server error. Try again.');
+  });
 }
 
-// ─── SESSION ─────────────────────────────────────────────────
-function _saveSession() {
-  try { localStorage.setItem(APP_CONFIG.SESSION_KEY, JSON.stringify({ user: _U, token: _TOKEN })); } catch(e) {}
-}
-function _loadSession() {
-  try {
-    var s = localStorage.getItem(APP_CONFIG.SESSION_KEY);
-    if (!s) return false;
-    var obj = JSON.parse(s);
-    if (!obj || !obj.token) return false;
-    _U = obj.user; _TOKEN = obj.token; return true;
-  } catch(e) { return false; }
-}
-function _clearSession() {
-  try {
-    localStorage.removeItem(APP_CONFIG.SESSION_KEY);
-    localStorage.removeItem(APP_CONFIG.DATA_KEY);
-    localStorage.removeItem(APP_CONFIG.DATA_TS_KEY);
-  } catch(e) {}
-}
-function _saveCachedData() {
-  try {
-    localStorage.setItem(APP_CONFIG.DATA_KEY, JSON.stringify(_DATA));
-    localStorage.setItem(APP_CONFIG.DATA_TS_KEY, Date.now().toString());
-  } catch(e) {}
-}
-function _loadCachedData() {
-  try {
-    var ts = localStorage.getItem(APP_CONFIG.DATA_TS_KEY);
-    if (!ts) return false;
-    if ((Date.now() - parseInt(ts)) / 60000 > APP_CONFIG.REFRESH_MINS) return false;
-    var d = localStorage.getItem(APP_CONFIG.DATA_KEY);
-    if (!d) return false;
-    _DATA = JSON.parse(d); return true;
-  } catch(e) { return false; }
+// ── Boot app ──────────────────────────────────────────────────────────────────
+function _bootApp(user){
+  _U=user;
+  document.getElementById('sLogin').className='scr';
+  document.getElementById('sApp').className='scr on';
+  _buildSidebar();
+  _buildMobNav();
+  _updateSbProfile();
+  var startView=_defaultView(user.role);
+  _loadV(startView);
+  _startPoll();
+  _loadAllData();
 }
 
-// ─── INIT ─────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', function() {
-  try {
-    var r = document.documentElement.style, c = APP_CONFIG.COLORS;
-    Object.keys(c).forEach(function(k) {
-      r.setProperty('--color-' + k.replace(/([A-Z])/g, '-$1').toLowerCase(), c[k]);
-    });
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function(e) { console.warn('SW:', e); });
-    }
-    if (_loadSession() && _U) { _initApp(); } else { _showLogin(); }
-  } catch (e) {
-    _recoverToLogin(e);
+function _defaultView(role){
+  if(role==='driver') return 'my_dashboard';
+  return 'dashboard';
+}
+
+// ── Check existing session on page load ───────────────────────────────────────
+window.addEventListener('load',function(){
+  var sess=_loadSession();
+  if(sess&&sess.user){
+    _bootApp(sess.user);
+  } else {
+    document.getElementById('sLogin').className='scr on';
+    document.getElementById('sApp').className='scr';
+    document.documentElement.classList.remove('has-session');
+    var em=document.getElementById('inp-email');if(em)em.focus();
   }
 });
 
-window.addEventListener('error', function(e) { _recoverToLogin(e.error || e.message); });
-window.addEventListener('unhandledrejection', function(e) { _recoverToLogin(e.reason); });
-
-function _recoverToLogin(error) {
-  console.error('ISE app recovery:', error);
-  if (_refreshTimer) clearInterval(_refreshTimer);
-  _U = null; _TOKEN = null; _DATA = {};
+// ── Logout ────────────────────────────────────────────────────────────────────
+function doLogout(){
+  if(!confirm('Logout karna chahte ho?'))return;
   _clearSession();
-  _hideLoader();
-  _showLogin();
+  _U=null;_D={};_curV='';
+  if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null;}
+  document.getElementById('sApp').className='scr';
+  document.getElementById('sLogin').className='scr on';
+  document.getElementById('inp-email').value='';
+  document.getElementById('inp-pass').value='';
+  document.documentElement.classList.remove('has-session');
 }
 
-function _showLogin() {
-  document.getElementById('login-screen').style.display = '';
-  document.getElementById('app-shell').style.display    = 'none';
-}
-
-function _doLogin() {
-  var email = document.getElementById('inp-email').value.trim();
-  var pass  = document.getElementById('inp-pass').value.trim();
-  if (!email || !pass) { _toast('Email aur password dono bharo.', 'danger'); return; }
-  _setLoginBusy(true);
-  _api('login', { email: email, password: pass },
-    function(r) {
-      _setLoginBusy(false);
-      if (!r.success) { _toast(r.error || 'Login fail.', 'danger'); return; }
-      _U = r.user; _TOKEN = r.token;
-      _saveSession(); _initApp();
-    },
-    function(e) { _setLoginBusy(false); _toast(e.message || 'Connection error.', 'danger'); }
-  );
-}
-
-function _setLoginBusy(busy) {
-  var btn = document.getElementById('btn-login');
-  if (!btn) return;
-  btn.disabled = busy; btn.textContent = busy ? 'Logging in...' : 'Login';
-}
-
-function _initApp() {
-  try {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app-shell').style.display    = '';
-    _qs('#user-name').textContent = _U.name;
-    _qs('#user-role').textContent = _cap(_U.role);
-    _buildNav();
-    if (_loadCachedData()) {
-      _showView(_U.role === 'driver' ? 'my_dashboard' : 'dashboard');
-      _refreshData();
-    } else {
-      _showLoader('Data load ho raha hai...');
-      _refreshData(function() { _showView(_U.role === 'driver' ? 'my_dashboard' : 'dashboard'); });
+// ── Load all data ─────────────────────────────────────────────────────────────
+function _loadAllData(silent){
+  if(!_U)return;
+  if(!silent)_showSkelContent();
+  _gas('getAllData',[],function(res){
+    if(res&&res.success!==false){
+      _D=res;
+      _renderCurrentView();
+      _checkCelebrations();
+      _checkAnnouncements();
     }
-    if (_refreshTimer) clearInterval(_refreshTimer);
-    _refreshTimer = setInterval(_refreshData, APP_CONFIG.REFRESH_MINS * 60000);
-  } catch (e) {
-    _recoverToLogin(e);
-  }
-}
-
-function _refreshData(cb) {
-  _api('getAllData', {},
-    function(r) {
-      if (r.success === false) { _toast(r.error, 'danger'); _hideLoader(); if (cb) cb(); return; }
-      delete r.success; delete r.timestamp;
-      _DATA = r; _saveCachedData(); _hideLoader();
-      if (cb) cb(); else if (_VIEW) _showView(_VIEW);
-    },
-    function(e) { _hideLoader(); _toast('Refresh fail: ' + e.message, 'danger'); if (cb) cb(); }
-  );
-}
-
-function _signOut() {
-  if (_refreshTimer) clearInterval(_refreshTimer);
-  if (_TOKEN) _api('logout', {}, function(){}, function(){});
-  _U = null; _TOKEN = null; _DATA = {};
-  _clearSession(); _showLogin();
-}
-
-// ─── NAVIGATION ───────────────────────────────────────────────
-function _buildNav() {
-  var role = _U.role;
-  var nav  = _qs('#bottom-nav');
-  nav.innerHTML = '';
-  var navItems = role === 'driver'
-    ? ['my_dashboard', 'my_attendance', 'my_inspection', 'my_fuel', 'my_trips']
-    : ['dashboard', 'operations', 'vehicles', 'fuel', 'services'];
-  navItems.forEach(function(key) {
-    var m = APP_CONFIG.MODULES[key]; if (!m) return;
-    var btn = document.createElement('button');
-    btn.className = 'nav-btn'; btn.id = 'nav-' + key;
-    btn.innerHTML = '<span class="nav-icon">' + m.icon + '</span><span class="nav-label">' + m.label + '</span>';
-    btn.onclick   = function() { _showView(key); };
-    nav.appendChild(btn);
+  },function(err){
+    if(!silent)_toast('Data load failed: '+err.message,'err');
   });
 }
 
-function _showView(viewKey, params) {
-  if (!_canAccessView(viewKey)) {
-    _toast('Is section ka access aapke role ke liye available nahi hai.', 'danger');
+function _refreshData(){
+  _toast('Refreshing...','info');
+  _loadAllData(true);
+}
+
+function _startPoll(){
+  if(_pollTimer)clearInterval(_pollTimer);
+  _pollTimer=setInterval(function(){
+    if(_U)_loadAllData(true);
+  },(APP_CONFIG.POLL_INTERVAL||30000));
+}
+
+// ── View routing ──────────────────────────────────────────────────────────────
+window._loadV=function(view){
+  _curV=view;
+  closeSb();
+  // Update sidebar active state
+  document.querySelectorAll('.nv').forEach(function(el){
+    el.classList.toggle('on',el.dataset.view===view);
+  });
+  document.querySelectorAll('.mob-nav-btn').forEach(function(el){
+    el.classList.toggle('on',el.dataset.view===view);
+  });
+  var mod=APP_CONFIG.MODULES[view]||{};
+  document.getElementById('tb-title').textContent=mod.label||view;
+  document.getElementById('tb-sub').textContent='Isha Steels Enterprises';
+  _renderView(view);
+};
+
+function _renderCurrentView(){if(_curV)_renderView(_curV);}
+
+function _renderView(view){
+  var c=document.getElementById('content');
+  if(!c)return;
+  c.style.animation='none';
+  requestAnimationFrame(function(){
+    c.style.animation='fadein .22s ease both';
+    switch(view){
+      case 'dashboard':       c.innerHTML=_vDashboard();break;
+      case 'operations':      c.innerHTML=_vOperations();break;
+      case 'vehicles':        c.innerHTML=_vVehicles();break;
+      case 'drivers':         c.innerHTML=_vDrivers();break;
+      case 'attendance':      c.innerHTML=_vAttendance();break;
+      case 'muster':          c.innerHTML=_vMuster();break;
+      case 'fuel':            c.innerHTML=_vFuel();break;
+      case 'trips':           c.innerHTML=_vTrips();break;
+      case 'expenses':        c.innerHTML=_vExpenses();break;
+      case 'fastag':          c.innerHTML=_vFastag();break;
+      case 'kmlogs':          c.innerHTML=_vKMLogs();break;
+      case 'dispatch':        c.innerHTML=_vDispatch();break;
+      case 'inspection':      c.innerHTML=_vInspection();break;
+      case 'cleaning':        c.innerHTML=_vCleaning();break;
+      case 'services':        c.innerHTML=_vServices();break;
+      case 'documents':       c.innerHTML=_vDocuments();break;
+      case 'reminders':       c.innerHTML=_vReminders();break;
+      case 'maintenance':     c.innerHTML=_vMaintenance();break;
+      case 'penalties':       c.innerHTML=_vPenalties();break;
+      case 'rewards':         c.innerHTML=_vRewards();break;
+      case 'checklist':       c.innerHTML=_vChecklist();break;
+      case 'checklist_setup': c.innerHTML=_vChecklistSetup();break;
+      case 'delegation':      c.innerHTML=_vDelegation();break;
+      case 'leave_requests':  c.innerHTML=_vLeaveRequests();break;
+      case 'holidays':        c.innerHTML=_vHolidays();break;
+      case 'announcements':   c.innerHTML=_vAnnouncements();break;
+      case 'analytics':       c.innerHTML=_vAnalytics();_initAnalyticsCharts();break;
+      case 'payroll':         c.innerHTML=_vPayroll();break;
+      case 'auditlog':        c.innerHTML=_vAuditLog();break;
+      case 'users':           c.innerHTML=_vUsers();break;
+      case 'settings':        c.innerHTML=_vSettings();break;
+      // Driver views
+      case 'my_dashboard':    c.innerHTML=_vMyDashboard();break;
+      case 'my_attendance':   c.innerHTML=_vMyAttendance();break;
+      case 'my_inspection':   c.innerHTML=_vMyInspection();break;
+      case 'my_cleaning':     c.innerHTML=_vMyCleaning();break;
+      case 'my_fuel':         c.innerHTML=_vMyFuel();break;
+      case 'my_trips':        c.innerHTML=_vMyTrips();break;
+      case 'my_expenses':     c.innerHTML=_vMyExpenses();break;
+      case 'my_kmlogs':       c.innerHTML=_vMyKMLogs();break;
+      case 'my_checklist':    c.innerHTML=_vMyChecklist();break;
+      case 'my_delegations':  c.innerHTML=_vMyDelegations();break;
+      case 'my_leave':        c.innerHTML=_vMyLeave();break;
+      case 'profile':         c.innerHTML=_vProfile();break;
+      default:                c.innerHTML=_vDashboard();
+    }
+  });
+}
+
+function _showSkelContent(){
+  var c=document.getElementById('content');if(!c)return;
+  c.innerHTML='<div class="skel skel-card"></div><div class="skel skel-card" style="height:60px"></div><div class="skel skel-card" style="height:100px"></div>';
+}
+
+// ── Sidebar builder ───────────────────────────────────────────────────────────
+function _buildSidebar(){
+  if(!_U)return;
+  var nav=document.getElementById('sb-nav');if(!nav)return;
+  var role=_U.role||'driver';
+  var groups=APP_CONFIG.NAV_GROUPS[role];
+  if(!groups){
+    // Driver: flat list
+    var items=APP_CONFIG.ROLE_MODULES[role]||[];
+    nav.innerHTML='<div class="nv-sec">'+items.map(function(m){
+      var md=APP_CONFIG.MODULES[m]||{};
+      return '<div class="nv" data-view="'+m+'" onclick="_loadV(\''+m+'\')"><i class="fas '+md.icon+'" style="color:'+md.color+'"></i>'+md.label+'</div>';
+    }).join('')+'</div>';
+    nav.innerHTML+='<hr class="nv-sep"><div class="nv nv-danger" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i>Logout</div>';
     return;
   }
-  _VIEW = viewKey; _searchQuery = ''; _filterState = {};
-  document.querySelectorAll('.nav-btn').forEach(function(b) { b.classList.remove('active'); });
-  var nb = document.getElementById('nav-' + viewKey);
-  if (nb) nb.classList.add('active');
-  var main = _qs('#main-content');
-  main.innerHTML = '';
-  main.scrollTop = 0;
-  switch(viewKey) {
-    case 'dashboard':      _renderDashboard(main); break;
-    case 'operations':     _renderOperations(main); break;
-    case 'my_dashboard':   _renderMyDashboard(main); break;
-    case 'vehicles':       _renderVehicles(main); break;
-    case 'vehicle_detail': _renderVehicleDetail(main, params); break;
-    case 'drivers':        _renderDrivers(main); break;
-    case 'driver_detail':  _renderDriverDetail(main, params); break;
-    case 'attendance':     _renderAttendance(main); break;
-    case 'my_attendance':  _renderMyAttendance(main); break;
-    case 'inspection':     _renderInspectionList(main); break;
-    case 'my_inspection':  _renderInspectionForm(main); break;
-    case 'cleaning':       _renderCleaningList(main); break;
-    case 'my_cleaning':    _renderCleaningForm(main); break;
-    case 'fuel':           _renderFuelList(main); break;
-    case 'my_fuel':        _renderFuelForm(main); break;
-    case 'trips':          _renderTrips(main); break;
-    case 'my_trips':       _renderTripForm(main); break;
-    case 'dispatch':       _renderDispatch(main); break;
-    case 'services':       _renderServices(main); break;
-    case 'service_form':   _renderServiceForm(main); break;
-    case 'documents':      _renderDocuments(main); break;
-    case 'reminders':      _renderReminders(main); break;
-    case 'expenses':       _renderExpenses(main); break;
-    case 'my_expenses':    _renderExpenseForm(main); break;
-    case 'fastag':         _renderFastag(main); break;
-    case 'fastag_form':    _renderFastagForm(main); break;
-    case 'kmlogs':         _renderKMLogs(main); break;
-    case 'my_kmlogs':      _renderKMLogForm(main); break;
-    case 'maintenance':    _renderMaintenance(main); break;
-    case 'penalties':      _renderPenalties(main); break;
-    case 'rewards':        _renderRewards(main); break;
-    case 'auditlog':       _renderAuditLog(main); break;
-    case 'users':          _renderUsers(main); break;
-    case 'vehicle_form':   _renderVehicleForm(main); break;
-    case 'driver_form':    _renderDriverForm(main); break;
-    case 'settings':       _renderSettings(main); break;
-    default: main.innerHTML = _emptyState('🚧', 'Coming Soon', 'Yeh view jald aa raha hai');
-  }
-}
-
-function _canAccessView(viewKey) {
-  var internalViews = ['vehicle_detail', 'driver_detail', 'vehicle_form', 'driver_form',
-    'service_form', 'fastag_form', 'settings'];
-  var operationalForms = ['my_fuel', 'my_trips', 'my_kmlogs', 'my_expenses'];
-  if (internalViews.indexOf(viewKey) >= 0) return _U && _U.role !== 'driver';
-  if (operationalForms.indexOf(viewKey) >= 0) return !!_U;
-  return !!(_U && (APP_CONFIG.ROLE_MODULES[_U.role] || []).indexOf(viewKey) >= 0);
-}
-
-// ═══════════════════════════════════════════════════════════════
-// VIEWS
-// ═══════════════════════════════════════════════════════════════
-
-// ── ADMIN DASHBOARD ───────────────────────────────────────────
-function _renderDashboard(el) {
-  var vehicles   = _DATA.vehicles   || [];
-  var drivers    = _DATA.drivers    || [];
-  var fuel       = _DATA.fuel       || [];
-  var services   = _DATA.services   || [];
-  var reminders  = _DATA.reminders  || [];
-  var attendance = _DATA.attendance || [];
-  var expenses   = _DATA.expenses   || [];
-
-  var activeVeh     = vehicles.filter(function(v){ return v.Status === 'Active'; }).length;
-  var activeDrivers = drivers.filter(function(d){ return d.Status === 'Active'; }).length;
-  var todayFuel     = fuel.filter(function(f){ return f.Date === _today(); });
-  var fuelAmt       = todayFuel.reduce(function(s,f){ return s + (parseFloat(f.Amount)||0); }, 0);
-  var pendingRem    = reminders.filter(function(r){ return r.Status === 'Pending'; }).length;
-  var todayAtt      = attendance.filter(function(a){ return a.Date === _today(); }).length;
-  var monthExp      = expenses.filter(function(e){ return (e.Date||'').startsWith(_thisMonth()); })
-                              .reduce(function(s,e){ return s + (parseFloat(e.Amount)||0); }, 0);
-  var svcPending    = services.filter(function(s){ return s.Status !== 'Completed'; }).length;
-
-  var expiring = vehicles.filter(function(v){
-    return _daysTo(v.InsuranceExpiry) <= 30 || _daysTo(v.PUCExpiry) <= 15;
+  var html='';
+  groups.forEach(function(g){
+    html+='<div class="nv-sec"><div class="nv-sec-lbl">'+g.label+'</div>';
+    g.items.forEach(function(m){
+      var md=APP_CONFIG.MODULES[m]||{};
+      var badge=m==='leave_requests'?'<span class="nv-badge" id="badge-leave"></span>':'';
+      var annBadge=m==='announcements'?'<span class="nv-badge" id="badge-ann"></span>':'';
+      html+='<div class="nv" data-view="'+m+'" onclick="_loadV(\''+m+'\')"><i class="fas '+md.icon+'" style="color:'+md.color+'"></i>'+_esc(md.label)+badge+annBadge+'</div>';
+    });
+    html+='</div>';
   });
+  html+='<hr class="nv-sep"><div class="nv nv-danger" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i>Logout</div>';
+  nav.innerHTML=html;
+}
 
-  // Last 7 days fuel spend for mini-trend
-  var trend = _last7DaysFuel(fuel);
+function _buildMobNav(){
+  if(!_U)return;
+  var nav=document.getElementById('mobNav');if(!nav)return;
+  var role=_U.role||'driver';
+  var items=(APP_CONFIG.MOB_NAV[role]||[]).slice(0,5);
+  nav.innerHTML=items.map(function(m){
+    var md=APP_CONFIG.MODULES[m]||{};
+    return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(\''+m+'\')">' +
+      '<i class="fas '+md.icon+'"></i>' +
+      '<span class="mob-nav-lbl">'+md.label.split(' ')[0]+'</span></button>';
+  }).join('');
+}
 
-  el.innerHTML = _pageHeader('📊 Dashboard') +
-  '<div class="content-pad">' +
+function _updateSbProfile(){
+  if(!_U)return;
+  var ava=document.getElementById('sb-ava'),avaTxt=document.getElementById('sb-ava-txt');
+  var nm=document.getElementById('sb-name'),rl=document.getElementById('sb-role');
+  var init=_initials(_U.name||'');var col=_avatarColor(_U.name||'');
+  if(ava)ava.style.background='linear-gradient(135deg,'+col+','+col+'aa)';
+  if(avaTxt)avaTxt.textContent=init;
+  if(nm)nm.textContent=_U.name||'User';
+  if(rl)rl.textContent=(_U.role||'driver').charAt(0).toUpperCase()+(_U.role||'').slice(1);
+}
 
-  // Hero stats row
-  '<div class="hero-stats">' +
-    _heroStat('🚗', vehicles.length, 'Vehicles', '#2980B9') +
-    _heroStat('👤', activeDrivers, 'Drivers', '#8E44AD') +
-    _heroStat('🔔', pendingRem, 'Alerts', pendingRem > 0 ? '#E74C3C' : '#27AE60') +
-    _heroStat('📋', todayAtt, "Today's Att.", '#27AE60') +
-  '</div>' +
+// ── Celebrations ──────────────────────────────────────────────────────────────
+function _checkCelebrations(){
+  var cels=_D.celebrations||[];
+  cels.forEach(function(c){
+    _addNtf(
+      (c.type==='birthday'?'🎂 Happy Birthday ':'🏢 Work Anniversary — ')+c.name+'!',
+      c.type==='birthday'?'fa-cake-candles':'fa-building','#FFF3E0','#E65100'
+    );
+  });
+}
+function _checkAnnouncements(){
+  var anns=_D.announcements||[];
+  var badge=document.getElementById('badge-ann');
+  if(badge)badge.textContent=anns.length||'';
+  if(badge)badge.style.display=anns.length?'':'none';
+}
 
-  // Finance strip
-  '<div class="finance-strip">' +
-    '<div class="fs-item"><div class="fs-label">Today\'s Fuel</div><div class="fs-val">₹' + fuelAmt.toFixed(0) + '</div></div>' +
-    '<div class="fs-sep"></div>' +
-    '<div class="fs-item"><div class="fs-label">Month Expense</div><div class="fs-val">₹' + _abbr(monthExp) + '</div></div>' +
-    '<div class="fs-sep"></div>' +
-    '<div class="fs-item"><div class="fs-label">Services Due</div><div class="fs-val">' + svcPending + '</div></div>' +
-    '<div class="fs-sep"></div>' +
-    '<div class="fs-item"><div class="fs-label">Active Vehicles</div><div class="fs-val">' + activeVeh + '</div></div>' +
-  '</div>' +
+// ── Badge updater ─────────────────────────────────────────────────────────────
+function _updateBadges(){
+  var leaves=(_D.leaveRequests||[]).filter(function(l){return String(l.status||'')==='Pending';});
+  var badge=document.getElementById('badge-leave');
+  if(badge){badge.textContent=leaves.length||'';badge.style.display=leaves.length?'':'none';}
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// VIEWS — ADMIN/MANAGER
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Common page header ────────────────────────────────────────────────────────
+function _ph(title,btn){
+  return '<div class="page-hdr"><div class="page-title">'+title+'</div><div class="page-actions">'+(btn||'')+'</div></div>';
+}
+function _emptyState(icon,title,sub){
+  return '<div class="empty-state"><div class="es-icon">'+icon+'</div><div class="es-title">'+_esc(title)+'</div><div class="es-sub">'+_esc(sub||'')+'</div></div>';
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────────────────────────
+function _vDashboard(){
+  var veh=_D.vehicles||[];
+  var drv=_D.drivers||[];
+  var att=_D.attendance||[];
+  var fuel=_D.fuel||[];
+  var cels=_D.celebrations||[];
+  var anns=_D.announcements||[];
+  var dels=_D.delegations||[];
+  var leaves=_D.leaveRequests||[];
+
+  var today=_today();
+  var todayAtt=att.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
+  var present=todayAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
+  var late=todayAtt.filter(function(a){return a.Status==='Late';}).length;
+  var pendingLeaves=leaves.filter(function(l){return l.status==='Pending';}).length;
+  var overdueTask=dels.filter(function(d){return d.is_overdue;}).length;
+
+  var activeVeh=veh.filter(function(v){return v.Status==='Active';}).length;
+  var activeDrivers=drv.filter(function(d){return d.Status==='Active';}).length;
 
   // Expiry alerts
-  (expiring.length ? '<div class="alert-card danger">' +
-    '<div class="ac-title">⚠️ Expiry Alerts (' + expiring.length + ')</div>' +
-    expiring.map(function(v){
-      var ins = _daysTo(v.InsuranceExpiry), puc = _daysTo(v.PUCExpiry);
-      var msgs = [];
-      if (ins <= 30) msgs.push('🛡️ Insurance: ' + ins + 'd');
-      if (puc <= 15) msgs.push('🌿 PUC: ' + puc + 'd');
-      return '<div class="ac-row"><b class="plate-tag">' + v.VehicleNo + '</b> ' + msgs.join(' · ') + '</div>';
-    }).join('') + '</div>' : '') +
+  var alerts=[];
+  veh.forEach(function(v){
+    var insD=_daysLeft(String(v.InsuranceExpiry||'').slice(0,10));
+    var pucD=_daysLeft(String(v.PUCExpiry||'').slice(0,10));
+    var ftB=Number(v.FastagBalance||0);
+    if(insD>=0&&insD<=30)alerts.push({type:'danger',icon:'🛡️',msg:v.VehicleNo+' Insurance expiry: '+insD+'d'});
+    if(pucD>=0&&pucD<=15)alerts.push({type:'warn',icon:'🌿',msg:v.VehicleNo+' PUC expiry: '+pucD+'d'});
+    if(ftB<300)alerts.push({type:'warn',icon:'🏷️',msg:v.VehicleNo+' Fastag low: ₹'+ftB});
+  });
 
-  // Fuel trend chart
-  '<div class="chart-card">' +
-    '<div class="cc-title">⛽ Fuel Spend — Last 7 Days</div>' +
-    '<canvas id="fuelChart" height="80"></canvas>' +
-  '</div>' +
+  // Today's fuel spend
+  var todayFuel=fuel.filter(function(f){return String(f.Date||'').slice(0,10)===today;})
+    .reduce(function(s,f){return s+Number(f.Amount||0);},0);
+
+  // Monthly fuel
+  var mon=today.slice(0,7);
+  var monFuel=fuel.filter(function(f){return String(f.Date||'').slice(0,7)===mon;})
+    .reduce(function(s,f){return s+Number(f.Amount||0);},0);
+
+  var html='';
+
+  // Celebration banners
+  cels.forEach(function(c){
+    html+='<div class="cel-banner"><div class="cel-icon">'+(c.type==='birthday'?'🎂':'🏢')+'</div>'+
+      '<div class="cel-msg"><div class="cel-name">'+_esc(c.type==='birthday'?'Happy Birthday, ':'Happy Work Anniversary, ')+_esc(c.name)+'!</div>'+
+      '<div class="cel-sub">'+(c.type==='birthday'?'Wishing you all the best!':''+c.years+' years with ISE!')+'</div></div></div>';
+  });
+
+  // KPI grid
+  html+='<div class="kpi-grid">';
+  html+=_kpi('fa-car','#2980B9',activeVeh,'Active Vehicles','Total fleet');
+  html+=_kpi('fa-id-badge','#8E44AD',activeDrivers,'Active Drivers','On roster');
+  html+=_kpi('fa-clipboard-check','#27AE60',present,'Present Today','Out of '+activeDrivers);
+  html+=_kpi('fa-clock','#E67E22',late,'Late Today','Late arrivals');
+  html+=_kpi('fa-gas-pump','#D51515',_inr(todayFuel),'Fuel Today','Spent today');
+  html+=_kpi('fa-gas-pump','#E67E22',_inr(monFuel),'Fuel This Month','Running total');
+  html+=_kpi('fa-calendar-xmark','#8E44AD',pendingLeaves,'Leave Pending','Awaiting approval',pendingLeaves>0?'onclick="_loadV(\'leave_requests\')"':'');
+  html+=_kpi('fa-triangle-exclamation','#E74C3C',overdueTask,'Overdue Tasks','Action needed',overdueTask>0?'onclick="_loadV(\'delegation\')"':'');
+  html+='</div>';
+
+  // Alerts
+  if(alerts.length){
+    html+='<div class="sec-hdr"><i class="fas fa-triangle-exclamation" style="color:var(--O)"></i>Alerts ('+alerts.length+')</div>';
+    html+='<div class="alert-card warn"><div class="ac-title">Vehicle Alerts</div>';
+    alerts.slice(0,6).forEach(function(a){html+='<div class="ac-row">'+a.icon+' '+_esc(a.msg)+'</div>';});
+    html+='</div>';
+  }
+
+  // Two column layout
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:4px">';
 
   // Today's attendance
-  _sectionHeader('Today\'s Attendance — ' + _today()) +
-  (todayAtt === 0
-    ? _emptyState('📋', 'No Attendance Yet', 'Aaj ka koi record nahi mila')
-    : _table(['Driver','Vehicle','In','Out','Status'],
-        attendance.filter(function(a){ return a.Date === _today(); }).map(function(a){
-          return [_dname(a.DriverID), _vnum(a.VehicleID), a.InTime||'—', a.OutTime||'—',
-            _badge(a.Status)];
-        }))) +
-
-  // Recent fuel
-  _sectionHeader('Recent Fuel Entries') +
-  _table(['Date','Vehicle','Qty','Amount','Mileage'],
-    fuel.slice(-5).reverse().map(function(f){
-      var m = parseFloat(f.Mileage||0);
-      return [f.Date, _vnum(f.VehicleID),
-        (f.FuelQty||'') + ' L', '₹' + (f.Amount||''),
-        m > 0 ? (m < 7 ? '<span class="red">' + m + ' km/L</span>' : m + ' km/L') : '—'];
-    })) +
-
-  // Pending reminders
-  _sectionHeader('Upcoming Reminders') +
-  _table(['Vehicle','Type','Date','Priority'],
-    reminders.filter(function(r){ return r.Status === 'Pending'; }).slice(0,6).map(function(r){
-      return [_vnum(r.VehicleID), r.ReminderType, r.ReminderDate, _badge(r.Priority)];
-    })) +
-
-  '</div>' + _fab('☰', 'openAllModules()');
-
-  // Draw fuel chart after DOM ready
-  setTimeout(function() { _drawFuelChart(trend); }, 50);
-}
-
-// ── OPERATIONS CONTROL ROOM ─────────────────────────────────
-function _renderOperations(el) {
-  var today = _today();
-  var vehicles = _DATA.vehicles || [];
-  var attendance = (_DATA.attendance || []).filter(function(a){ return a.Date === today; });
-  var inspections = (_DATA.inspections || []).filter(function(i){ return i.Date === today; });
-  var trips = (_DATA.trips || []).filter(function(t){ return t.Date === today; });
-  var reminders = (_DATA.reminders || []).filter(function(r){ return r.Status === 'Pending'; });
-  var services = (_DATA.services || []).filter(function(s){ return s.Status !== 'Completed'; });
-  var checkedIn = attendance.filter(function(a){ return a.InTime && !a.OutTime; }).length;
-  var missingInspection = vehicles.filter(function(v){
-    return v.Status === 'Active' && !inspections.some(function(i){ return i.VehicleID === v.VehicleID; });
-  });
-  var urgentDocs = vehicles.filter(function(v){
-    return _daysTo(v.InsuranceExpiry) <= 15 || _daysTo(v.PUCExpiry) <= 7;
-  });
-
-  el.innerHTML = _pageHeader('🎯 Control Room',
-    '<button class="btn-sm btn-ghost" onclick="_refreshData()">↻ Refresh</button>') +
-    '<div class="content-pad">' +
-      '<div class="control-hero"><div><span class="eyebrow">LIVE OPERATIONS · ' + today + '</span>' +
-        '<h3>' + checkedIn + ' drivers currently on duty</h3><p>Priorities ko resolve karke fleet ko moving rakhein.</p></div>' +
-        '<button class="control-cta" onclick="_showView(\'dispatch\')">Dispatch Board →</button></div>' +
-      '<div class="hero-stats">' +
-        _heroStat('📋', attendance.length, 'Attendance', '#27AE60') +
-        _heroStat('🔍', inspections.length, 'Inspections', '#D51515') +
-        _heroStat('🗺️', trips.length, 'Trips today', '#2980B9') +
-        _heroStat('⚠️', reminders.length + services.length, 'Open alerts', '#E67E22') +
-      '</div>' +
-      _sectionHeader('Needs attention') +
-      _attentionCard('🔍', 'Pre-trip inspection pending', missingInspection.length,
-        missingInspection.length ? missingInspection.slice(0, 3).map(function(v){ return v.VehicleNo; }).join(' · ') : 'All active vehicles checked',
-        missingInspection.length ? 'inspection' : null) +
-      _attentionCard('📄', 'Document expiry risk', urgentDocs.length,
-        urgentDocs.length ? urgentDocs.slice(0, 3).map(function(v){ return v.VehicleNo; }).join(' · ') : 'No critical expiry in next 7–15 days',
-        urgentDocs.length ? 'documents' : null) +
-      _attentionCard('🔧', 'Services awaiting closure', services.length,
-        services.length ? services.slice(0, 3).map(function(s){ return _vnum(s.VehicleID); }).join(' · ') : 'No open service jobs',
-        services.length ? 'services' : null) +
-      _sectionHeader('Today\'s trip activity') +
-      (trips.length ? _table(['Vehicle', 'Route', 'KM', 'Material'], trips.slice(-8).reverse().map(function(t){
-        return [_vnum(t.VehicleID), (t.FromLocation || '—') + ' → ' + (t.ToLocation || '—'), t.TotalKM || '—', t.MaterialType || '—'];
-      })) : _emptyState('🗺️', 'No trips logged today', 'Dispatch start karte hi yahan live activity dikh jayegi.')) +
-    '</div>';
-}
-
-function _attentionCard(icon, title, count, detail, view) {
-  return '<button class="attention-card"' + (view ? ' onclick="_showView(\'' + view + '\')"' : '') + '>' +
-    '<span class="attention-icon">' + icon + '</span><span class="attention-copy"><b>' + title + '</b><small>' + detail + '</small></span>' +
-    '<span class="attention-count">' + count + (view ? ' ›' : '') + '</span></button>';
-}
-
-function _last7DaysFuel(fuel) {
-  var days = [], today = new Date();
-  for (var i = 6; i >= 0; i--) {
-    var d = new Date(today); d.setDate(d.getDate() - i);
-    var ds = d.getFullYear() + '-' + _pad(d.getMonth()+1) + '-' + _pad(d.getDate());
-    var amt = fuel.filter(function(f){ return f.Date === ds; })
-                  .reduce(function(s,f){ return s + (parseFloat(f.Amount)||0); }, 0);
-    days.push({ label: _pad(d.getDate()) + '/' + _pad(d.getMonth()+1), amt: amt });
-  }
-  return days;
-}
-
-function _drawFuelChart(trend) {
-  var canvas = document.getElementById('fuelChart');
-  if (!canvas || !canvas.getContext) return;
-  var ctx = canvas.getContext('2d');
-  var W = canvas.offsetWidth || 300;
-  canvas.width = W; canvas.height = 80;
-  var max = Math.max.apply(null, trend.map(function(t){ return t.amt; })) || 1;
-  var barW = (W - 40) / trend.length;
-  ctx.clearRect(0, 0, W, 80);
-  trend.forEach(function(t, i) {
-    var barH = Math.max(4, (t.amt / max) * 55);
-    var x = 20 + i * barW + barW * 0.15;
-    var bw = barW * 0.7;
-    // Bar
-    var grad = ctx.createLinearGradient(0, 80 - barH, 0, 80);
-    grad.addColorStop(0, '#D51515');
-    grad.addColorStop(1, '#FF6B6B');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(x, 80 - barH - 14, bw, barH, 3)
-                  : ctx.rect(x, 80 - barH - 14, bw, barH);
-    ctx.fill();
-    // Label
-    ctx.fillStyle = '#999'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(t.label, x + bw/2, 78);
-    if (t.amt > 0) {
-      ctx.fillStyle = '#2B2B2B'; ctx.font = 'bold 9px sans-serif';
-      ctx.fillText('₹' + _abbr(t.amt), x + bw/2, 80 - barH - 17);
-    }
-  });
-}
-
-// ── DRIVER DASHBOARD ──────────────────────────────────────────
-function _renderMyDashboard(el) {
-  var att  = _DATA.myAttendance  || [];
-  var fuel = _DATA.myFuel        || [];
-  var ins  = _DATA.myInspections || [];
-  var veh  = _U.assignedVehicle;
-  var monthAtt = att.filter(function(a){ return (a.Date||'').startsWith(_thisMonth()); });
-  var presentDays = monthAtt.filter(function(a){ return a.Status === 'Present'; }).length;
-  var penalties = _DATA.myPenalties || [];
-  var rewards   = _DATA.myRewards   || [];
-
-  el.innerHTML = _pageHeader('👋 Namaskar, ' + _U.name.split(' ')[0] + '!') +
-  '<div class="content-pad">' +
-
-  // My vehicle card — rich version
-  (veh
-    ? '<div class="my-vehicle-card">' +
-        '<div class="mvc-left">' +
-          '<div class="mvc-plate">' + (veh.VehicleNo || 'N/A') + '</div>' +
-          '<div class="mvc-brand">' + (veh.Brand||'') + ' ' + (veh.Model||'') + '</div>' +
-          '<div class="mvc-meta">' + (veh.FuelType||'') + ' · ' + (veh.VehicleType||'') + '</div>' +
-        '</div>' +
-        '<div class="mvc-right">' +
-          '<div class="mvc-km">' + _abbr(parseFloat(veh.CurrentKM||0)) + '</div>' +
-          '<div class="mvc-km-label">KM</div>' +
-          '<div class="mvc-fastag">🏷️ ₹' + (veh.FastagBalance||0) + '</div>' +
-        '</div>' +
-      '</div>'
-    : '<div class="alert-card info">Koi vehicle assign nahi hai abhi. Admin se contact karo.</div>') +
-
-  // This month stats
-  '<div class="month-strip">' +
-    '<div class="ms-item"><div class="ms-val">' + presentDays + '</div><div class="ms-label">Present</div></div>' +
-    '<div class="ms-item"><div class="ms-val">' + fuel.length + '</div><div class="ms-label">Fuel Logs</div></div>' +
-    '<div class="ms-item"><div class="ms-val">' + ins.length + '</div><div class="ms-label">Inspections</div></div>' +
-    '<div class="ms-item"><div class="ms-val">' + (_DATA.myTrips||[]).length + '</div><div class="ms-label">Trips</div></div>' +
-  '</div>' +
-
-  _renderDriverTodayChecklist(att, ins, _DATA.myCleaning || [], fuel, _DATA.myTrips || []) +
-
-  // Pending alerts for driver
-  (penalties.filter(function(p){ return p.Status === 'Pending'; }).length
-    ? '<div class="alert-card danger"><div class="ac-title">⚠️ Pending Penalty</div>' +
-        penalties.filter(function(p){ return p.Status === 'Pending'; }).map(function(p){
-          return '<div class="ac-row">₹' + (p.Amount||0) + ' — ' + (p.Reason||'') + '</div>';
-        }).join('') + '</div>'
-    : '') +
-  (rewards.filter(function(r){ return r.Status === 'Pending'; }).length
-    ? '<div class="alert-card" style="background:#FEF9E7;border-left-color:#F1C40F">' +
-        '<div class="ac-title">🏆 Reward Pending</div>' +
-        rewards.filter(function(r){ return r.Status === 'Pending'; }).map(function(r){
-          return '<div class="ac-row">₹' + (r.Amount||0) + ' — ' + (r.Reason||'') + '</div>';
-        }).join('') + '</div>'
-    : '') +
-
-  // Quick actions — big tappable buttons
-  _sectionHeader('Quick Actions') +
-  '<div class="big-actions">' +
-    _bigAction('📋', 'Mark Attendance', 'openAttModal()', '#27AE60') +
-    _bigAction('🔍', 'Inspection', 'openInsForm()', '#D51515') +
-    _bigAction('🧽', 'Cleaning', 'openClnForm()', '#16A085') +
-    _bigAction('⛽', 'Fuel Entry', 'openFuelForm()', '#E67E22') +
-    _bigAction('🗺️', 'Log Trip', 'openTripForm()', '#2980B9') +
-    _bigAction('📏', 'KM Entry', 'openKMForm()', '#8E44AD') +
-  '</div>' +
-
-  // Recent attendance
-  _sectionHeader('This Month\'s Attendance') +
-  _attendanceCalendar(att) +
-
-  // Recent fuel
-  _sectionHeader('My Recent Fuel Entries') +
-  _table(['Date','Qty','Amount','Mileage'],
-    fuel.slice(-5).reverse().map(function(f){
-      var m = parseFloat(f.Mileage||0);
-      return [f.Date, (f.FuelQty||'')+'L', '₹'+(f.Amount||''),
-        m > 0 ? (m < 7 ? '<span class="red">'+m+'</span>' : m) : '—'];
-    })) +
-
-  '</div>';
-}
-
-function _renderDriverTodayChecklist(att, ins, cleaning, fuel, trips) {
-  var today = _today();
-  var steps = [
-    { icon: '📋', label: 'Attendance', done: att.some(function(x){ return x.Date === today && x.InTime; }), view: 'my_attendance', action: 'openAttModal()' },
-    { icon: '🔍', label: 'Inspection', done: ins.some(function(x){ return x.Date === today; }), view: 'my_inspection' },
-    { icon: '🧽', label: 'Cleaning', done: cleaning.some(function(x){ return x.Date === today; }), view: 'my_cleaning' },
-    { icon: '🗺️', label: 'Trip Log', done: trips.some(function(x){ return x.Date === today; }), view: 'my_trips' },
-    { icon: '⛽', label: 'Fuel / KM', done: fuel.some(function(x){ return x.Date === today; }), view: 'my_fuel' }
-  ];
-  var completed = steps.filter(function(x){ return x.done; }).length;
-  return _sectionHeader('Aaj ka kaam · ' + completed + '/' + steps.length + ' complete') +
-    '<div class="daily-checklist">' + steps.map(function(step) {
-      var run = step.action || "_showView('" + step.view + "')";
-      return '<button class="daily-step ' + (step.done ? 'is-done' : '') + '" onclick="' + run + '">' +
-        '<span>' + step.icon + '</span><b>' + step.label + '</b><em>' + (step.done ? 'Done ✓' : 'Pending ›') + '</em></button>';
-    }).join('') + '</div>';
-}
-
-// Mini attendance calendar (dots)
-function _attendanceCalendar(att) {
-  var today = new Date();
-  var year  = today.getFullYear(), month = today.getMonth();
-  var days  = new Date(year, month+1, 0).getDate();
-  var firstDay = new Date(year, month, 1).getDay();
-  var attMap = {};
-  att.forEach(function(a) { attMap[a.Date] = a.Status; });
-  var html = '<div class="att-cal">';
-  ['S','M','T','W','T','F','S'].forEach(function(d) {
-    html += '<div class="cal-head">' + d + '</div>';
-  });
-  for (var i = 0; i < firstDay; i++) html += '<div class="cal-cell"></div>';
-  for (var d2 = 1; d2 <= days; d2++) {
-    var ds = year + '-' + _pad(month+1) + '-' + _pad(d2);
-    var st = attMap[ds];
-    var cls = st === 'Present' ? 'cal-present'
-            : st === 'Absent'  ? 'cal-absent'
-            : st === 'Late'    ? 'cal-late'
-            : d2 === today.getDate() ? 'cal-today' : '';
-    html += '<div class="cal-cell ' + cls + '" title="' + (st||ds) + '">' + d2 + '</div>';
-  }
-  return html + '</div>';
-}
-
-// ── VEHICLES ──────────────────────────────────────────────────
-function _renderVehicles(el) {
-  var vehicles = _DATA.vehicles || [];
-  el.innerHTML = _pageHeader('🚗 Vehicles',
-    _U.role !== 'driver'
-      ? '<button class="btn-sm btn-primary" onclick="_showView(\'vehicle_form\')">+ Add</button>' : '') +
-  _searchBar('vehSearch', 'Search by number, brand, model...', 'filterVehicles()') +
-  '<div class="content-pad" id="veh-list">';
-
-  _renderVehicleCards(el.querySelector('#veh-list'), vehicles, '');
-  el.innerHTML += '</div>';
-}
-
-function _renderVehicleCards(container, vehicles, query) {
-  var filtered = query
-    ? vehicles.filter(function(v){
-        var q = query.toLowerCase();
-        return (v.VehicleNo||'').toLowerCase().includes(q) ||
-               (v.Brand||'').toLowerCase().includes(q) ||
-               (v.Model||'').toLowerCase().includes(q) ||
-               (v.FuelType||'').toLowerCase().includes(q);
-      })
-    : vehicles;
-
-  if (filtered.length === 0) {
-    container.innerHTML = _emptyState('🔍', 'Koi vehicle nahi mila', 'Search term badlo');
-    return;
-  }
-
-  container.innerHTML = filtered.map(function(v) {
-    var insD = _daysTo(v.InsuranceExpiry);
-    var pucD = _daysTo(v.PUCExpiry);
-    var health = insD > 30 && pucD > 15 ? 'good' : insD > 7 && pucD > 5 ? 'warn' : 'bad';
-    var healthColor = health === 'good' ? '#27AE60' : health === 'warn' ? '#F39C12' : '#E74C3C';
-    var healthLabel = health === 'good' ? 'OK' : health === 'warn' ? 'Alert' : 'Critical';
-
-    return '<div class="veh-card" onclick="_showView(\'vehicle_detail\',\'' + v.VehicleID + '\')">' +
-      '<div class="vc2-header">' +
-        '<div class="vc2-plate-wrap">' +
-          '<div class="vc2-plate">' + (v.VehicleNo||'—') + '</div>' +
-          '<div class="vc2-brand">' + (v.Brand||'') + ' ' + (v.Model||'') + '</div>' +
-        '</div>' +
-        '<div class="vc2-health" style="background:' + healthColor + '20;color:' + healthColor + '">' +
-          '<span class="vc2-dot" style="background:' + healthColor + '"></span>' + healthLabel +
-        '</div>' +
-      '</div>' +
-      '<div class="vc2-pills">' +
-        '<span class="pill">⛽ ' + (v.FuelType||'—') + '</span>' +
-        '<span class="pill">🚗 ' + (v.VehicleType||'—') + '</span>' +
-        '<span class="pill">🏢 ' + (v.OwnershipType||'—') + '</span>' +
-      '</div>' +
-      '<div class="vc2-stats">' +
-        '<div class="vc2-stat"><div class="vs-val">' + _abbr(parseFloat(v.CurrentKM||0)) + '</div><div class="vs-label">KM</div></div>' +
-        '<div class="vc2-stat"><div class="vs-val">₹' + (v.FastagBalance||0) + '</div><div class="vs-label">Fastag</div></div>' +
-        '<div class="vc2-stat ' + (insD <= 30 ? 'red' : '') + '"><div class="vs-val">' + insD + 'd</div><div class="vs-label">Insurance</div></div>' +
-        '<div class="vc2-stat ' + (pucD <= 15 ? 'red' : '') + '"><div class="vs-val">' + pucD + 'd</div><div class="vs-label">PUC</div></div>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-}
-
-function filterVehicles() {
-  var q = document.getElementById('vehSearch').value.trim();
-  _renderVehicleCards(_qs('#veh-list'), _DATA.vehicles || [], q);
-}
-
-// ── VEHICLE DETAIL ────────────────────────────────────────────
-function _renderVehicleDetail(el, vehicleID) {
-  var v = (_DATA.vehicles||[]).find(function(x){ return x.VehicleID === vehicleID; });
-  if (!v) { el.innerHTML = _emptyState('❌', 'Vehicle nahi mila', ''); return; }
-
-  var fuelHistory = (_DATA.fuel||[]).filter(function(f){ return f.VehicleID === vehicleID; });
-  var svcHistory  = (_DATA.services||[]).filter(function(s){ return s.VehicleID === vehicleID; });
-  var docs        = (_DATA.documents||[]).filter(function(d){ return d.VehicleID === vehicleID; });
-  var trips       = (_DATA.trips||[]).filter(function(t){ return t.VehicleID === vehicleID; });
-  var expenses    = (_DATA.expenses||[]).filter(function(e){ return e.VehicleID === vehicleID; });
-  var insD = _daysTo(v.InsuranceExpiry), pucD = _daysTo(v.PUCExpiry);
-  var driver = (_DATA.drivers||[]).find(function(d){ return d.DriverID === v.AssignedDriverID; });
-  var totalFuelCost = fuelHistory.reduce(function(s,f){ return s + (parseFloat(f.Amount)||0); }, 0);
-  var totalExpCost  = expenses.reduce(function(s,e){ return s + (parseFloat(e.Amount)||0); }, 0);
-
-  el.innerHTML = _pageHeader(v.VehicleNo, '<button class="btn-sm btn-ghost" onclick="history.back()">← Back</button>') +
-  '<div class="content-pad">' +
-
-  // Big vehicle card
-  '<div class="vd-hero">' +
-    '<div class="vd-plate">' + v.VehicleNo + '</div>' +
-    '<div class="vd-name">' + (v.Brand||'') + ' ' + (v.Model||'') + ' · ' + (v.FuelType||'') + '</div>' +
-    '<div class="vd-pills">' +
-      _badge(v.Status) +
-      '<span class="pill">' + (v.VehicleType||'—') + '</span>' +
-      '<span class="pill">' + (v.OwnershipType||'—') + '</span>' +
-    '</div>' +
-  '</div>' +
-
-  // Assigned driver
-  (driver ? '<div class="list-card" style="margin-bottom:.6rem" onclick="_showView(\'driver_detail\',\'' + driver.DriverID + '\')">' +
-    '<div class="lc-row"><b>👤 Assigned Driver</b><span class="badge badge-active">Active</span></div>' +
-    '<div class="lc-meta"><b>' + driver.Name + '</b> · 📱 ' + driver.Mobile + ' · 🩸 ' + (driver.BloodGroup||'—') + '</div>' +
-  '</div>' : '<div class="alert-card info">Koi driver assign nahi hai.</div>') +
-
-  // Stats grid
-  '<div class="vd-stats">' +
-    _vdStat('📏', _abbr(parseFloat(v.CurrentKM||0)) + ' KM', 'Odometer') +
-    _vdStat('⛽', fuelHistory.length, 'Fuel Logs') +
-    _vdStat('🔧', svcHistory.length, 'Services') +
-    _vdStat('🗺️', trips.length, 'Trips') +
-    _vdStat('💸', '₹' + _abbr(totalFuelCost + totalExpCost), 'Total Cost') +
-    _vdStat('🏷️', '₹' + (v.FastagBalance||0), 'Fastag Bal') +
-  '</div>' +
-
-  // Document status
-  _sectionHeader('Document Status') +
-  '<div class="doc-status-grid">' +
-    _docStatus('🛡️', 'Insurance', v.InsuranceExpiry, insD) +
-    _docStatus('🌿', 'PUC', v.PUCExpiry, pucD) +
-    _docStatus('📄', 'Registration', v.RegistrationNo, null) +
-  '</div>' +
-
-  // Technical details
-  _sectionHeader('Technical Details') +
-  '<div class="detail-grid">' +
-    _detailRow('Engine No', v.EngineNo) +
-    _detailRow('Chassis No', v.ChassisNo) +
-    _detailRow('Fastag No', v.FastagNo) +
-    _detailRow('Reg No', v.RegistrationNo) +
-    _detailRow('Added On', v.CreatedOn) +
-  '</div>' +
-
-  // Fuel history
-  _sectionHeader('Recent Fuel History') +
-  _table(['Date','Qty','Amount','Mileage','Pump'],
-    fuelHistory.slice(-6).reverse().map(function(f){
-      var m = parseFloat(f.Mileage||0);
-      return [f.Date, (f.FuelQty||'')+'L', '₹'+(f.Amount||''),
-        m > 0 ? (m < 7 ? '<span class="red">'+m+' km/L</span>' : m+' km/L') : '—',
-        f.PumpName||'—'];
-    })) +
-
-  // Service history
-  _sectionHeader('Service History') +
-  _table(['Date','Type','Issue','Amount','Status'],
-    svcHistory.slice(-5).reverse().map(function(s){
-      return [s.ServiceDate, s.ServiceType||'—', s.Issue||'—', '₹'+(s.Amount||''), _badge(s.Status)];
-    })) +
-
-  // Documents list
-  (docs.length ? _sectionHeader('Documents') +
-  _table(['Type','Doc No','Expiry','Status'],
-    docs.map(function(d){
-      var dd = _daysTo(d.ExpiryDate);
-      return [d.DocumentType, d.DocumentNumber,
-        '<span class="' + (dd <= 30 ? 'red' : '') + '">' + (d.ExpiryDate||'—') + (dd <= 30 ? ' ('+dd+'d)' : '') + '</span>',
-        _badge(d.Status)];
-    })) : '') +
-
-  // Action buttons
-  '<div class="action-btns">' +
-    ((_U.role === 'admin' || _U.role === 'manager')
-      ? '<button class="btn-action" onclick="_showView(\'service_form\')">🔧 Log Service</button>' +
-        '<button class="btn-action" onclick="_showView(\'fastag_form\')">🏷️ Recharge Fastag</button>'
-      : '') +
-  '</div>' +
-
-  '</div>';
-}
-
-function _docStatus(icon, label, val, days) {
-  var cls = days === null ? 'ok' : days <= 0 ? 'bad' : days <= 30 ? 'warn' : 'ok';
-  var color = cls === 'ok' ? '#27AE60' : cls === 'warn' ? '#F39C12' : '#E74C3C';
-  return '<div class="doc-status-card" style="border-top-color:' + color + '">' +
-    '<div class="dsc-icon">' + icon + '</div>' +
-    '<div class="dsc-label">' + label + '</div>' +
-    '<div class="dsc-val" style="color:' + color + '">' + (val||'N/A') + '</div>' +
-    (days !== null ? '<div class="dsc-days" style="color:' + color + '">' + (days <= 0 ? 'EXPIRED' : days + ' days') + '</div>' : '') +
-  '</div>';
-}
-
-function _vdStat(icon, val, label) {
-  return '<div class="vd-stat-card"><div class="vds-icon">' + icon + '</div>' +
-    '<div class="vds-val">' + val + '</div><div class="vds-label">' + label + '</div></div>';
-}
-
-// ── DRIVERS ───────────────────────────────────────────────────
-function _renderDrivers(el) {
-  var drivers = _DATA.drivers || [];
-  el.innerHTML = _pageHeader('👤 Drivers',
-    '<button class="btn-sm btn-primary" onclick="_showView(\'driver_form\')">+ Add</button>') +
-  _searchBar('drvSearch', 'Search by name, mobile, license...', 'filterDrivers()') +
-  '<div class="content-pad" id="drv-list">';
-  _renderDriverCards(_qs('#drv-list'), drivers, '');
-  el.innerHTML += '</div>';
-}
-
-function _renderDriverCards(container, drivers, query) {
-  var filtered = query
-    ? drivers.filter(function(d){
-        var q = query.toLowerCase();
-        return (d.Name||'').toLowerCase().includes(q) ||
-               (d.Mobile||'').includes(q) ||
-               (d.LicenseNo||'').toLowerCase().includes(q);
-      })
-    : drivers;
-
-  if (filtered.length === 0) {
-    container.innerHTML = _emptyState('🔍', 'Koi driver nahi mila', 'Search term badlo');
-    return;
-  }
-
-  container.innerHTML = filtered.map(function(d) {
-    var licDays = _daysTo(d.LicenseExpiry);
-    var assignedVeh = (_DATA.vehicles||[]).find(function(v){ return v.AssignedDriverID === d.DriverID; });
-    return '<div class="drv-card" onclick="_showView(\'driver_detail\',\'' + d.DriverID + '\')">' +
-      '<div class="dc-top">' +
-        '<div class="dc-avatar" style="background:' + _nameColor(d.Name) + '">' + _initials(d.Name) + '</div>' +
-        '<div class="dc-info">' +
-          '<div class="dc-name">' + (d.Name||'—') + '</div>' +
-          '<div class="dc-sub">📱 ' + (d.Mobile||'—') + ' · 🩸 ' + (d.BloodGroup||'—') + '</div>' +
-          '<div class="dc-sub">' + _badge(d.Status) + '</div>' +
-        '</div>' +
-        '<div class="dc-salary">₹' + _abbr(parseFloat(d.Salary||0)) + '<br><span>Salary</span></div>' +
-      '</div>' +
-      '<div class="dc-bottom">' +
-        '<span class="pill">🚗 ' + (assignedVeh ? assignedVeh.VehicleNo : 'Unassigned') + '</span>' +
-        '<span class="pill ' + (licDays <= 90 ? 'pill-warn' : '') + '">📄 Lic: ' + licDays + 'd</span>' +
-        '<span class="pill">📅 ' + (d.JoiningDate||'—') + '</span>' +
-      '</div>' +
-    '</div>';
-  }).join('');
-}
-
-function filterDrivers() {
-  _renderDriverCards(_qs('#drv-list'), _DATA.drivers || [], document.getElementById('drvSearch').value.trim());
-}
-
-// ── DRIVER DETAIL ─────────────────────────────────────────────
-function _renderDriverDetail(el, driverID) {
-  var d = (_DATA.drivers||[]).find(function(x){ return x.DriverID === driverID; });
-  if (!d) { el.innerHTML = _emptyState('❌', 'Driver nahi mila', ''); return; }
-
-  var att   = (_DATA.attendance||[]).filter(function(a){ return a.DriverID === driverID; });
-  var fuel  = (_DATA.fuel||[]).filter(function(f){ return f.DriverID === driverID; });
-  var trips = (_DATA.trips||[]).filter(function(t){ return t.DriverID === driverID; });
-  var pens  = (_DATA.penalties||[]).filter(function(p){ return p.DriverID === driverID; });
-  var rwds  = (_DATA.rewards||[]).filter(function(r){ return r.DriverID === driverID; });
-  var vehicle = (_DATA.vehicles||[]).find(function(v){ return v.AssignedDriverID === driverID; });
-
-  var presentCount = att.filter(function(a){ return a.Status === 'Present'; }).length;
-  var penTotal = pens.reduce(function(s,p){ return s + (parseFloat(p.Amount)||0); }, 0);
-  var rwdTotal = rwds.reduce(function(s,r){ return s + (parseFloat(r.Amount)||0); }, 0);
-  var licDays  = _daysTo(d.LicenseExpiry);
-
-  el.innerHTML = _pageHeader(d.Name, '<button class="btn-sm btn-ghost" onclick="history.back()">← Back</button>') +
-  '<div class="content-pad">' +
-
-  // Profile hero
-  '<div class="drv-hero">' +
-    '<div class="dh-avatar" style="background:' + _nameColor(d.Name) + '">' + _initials(d.Name) + '</div>' +
-    '<div class="dh-info">' +
-      '<div class="dh-name">' + (d.Name||'—') + '</div>' +
-      '<div class="dh-id">' + (d.DriverID||'') + '</div>' +
-      _badge(d.Status) +
-    '</div>' +
-  '</div>' +
-
-  // Stat row
-  '<div class="vd-stats">' +
-    _vdStat('📋', presentCount, 'Days Present') +
-    _vdStat('⛽', fuel.length, 'Fuel Logs') +
-    _vdStat('🗺️', trips.length, 'Trips') +
-    _vdStat('⚠️', pens.length, 'Penalties') +
-    _vdStat('🏆', rwds.length, 'Rewards') +
-    _vdStat('💰', '₹' + _abbr(rwdTotal - penTotal), 'Net Reward') +
-  '</div>' +
-
-  // Assigned vehicle
-  (vehicle
-    ? '<div class="list-card" onclick="_showView(\'vehicle_detail\',\'' + vehicle.VehicleID + '\')">' +
-        '<div class="lc-row"><b>🚗 Assigned Vehicle</b><span class="badge badge-active">Active</span></div>' +
-        '<div class="lc-meta"><b class="plate-tag">' + vehicle.VehicleNo + '</b> · ' + (vehicle.Brand||'') + ' ' + (vehicle.Model||'') + '</div>' +
-      '</div>'
-    : '<div class="alert-card info">Koi vehicle assign nahi hai.</div>') +
-
-  // Details
-  _sectionHeader('Personal Details') +
-  '<div class="detail-grid">' +
-    _detailRow('📱 Mobile', d.Mobile) +
-    _detailRow('🆘 Emergency', d.EmergencyContact) +
-    _detailRow('🩸 Blood Group', d.BloodGroup) +
-    _detailRow('📍 Address', d.Address) +
-    _detailRow('🆔 Aadhaar', d.AadhaarNo ? '****' + d.AadhaarNo.slice(-4) : '—') +
-    _detailRow('💰 Salary', '₹' + (d.Salary||'—')) +
-    _detailRow('📅 Joined', d.JoiningDate) +
-  '</div>' +
-
-  _sectionHeader('License') +
-  '<div class="detail-grid">' +
-    _detailRow('License No', d.LicenseNo) +
-    _detailRow('License Expiry', '<span class="' + (licDays <= 90 ? 'red' : '') + '">' + (d.LicenseExpiry||'—') + (licDays <= 90 ? ' (' + licDays + 'd)' : '') + '</span>') +
-  '</div>' +
-
-  // Attendance this month
-  _sectionHeader('This Month\'s Attendance') +
-  _attendanceCalendar(att) +
-
-  // Recent trips
-  _sectionHeader('Recent Trips') +
-  _table(['Date','From','To','KM','Material'],
-    trips.slice(-5).reverse().map(function(t){
-      return [t.Date, t.FromLocation||'—', t.ToLocation||'—', t.TotalKM||'—', t.MaterialType||'—'];
-    })) +
-
-  // Penalties & Rewards
-  (pens.length ? _sectionHeader('Penalties') +
-    _table(['Date','Reason','Amount','Status'],
-      pens.slice(-5).reverse().map(function(p){
-        return [p.Date, p.Reason||'—', '₹'+(p.Amount||0), _badge(p.Status)];
-      })) : '') +
-
-  (rwds.length ? _sectionHeader('Rewards') +
-    _table(['Date','Reason','Amount','Status'],
-      rwds.slice(-5).reverse().map(function(r){
-        return [r.Date, r.Reason||'—', '₹'+(r.Amount||0), _badge(r.Status)];
-      })) : '') +
-
-  // Actions
-  (_U.role === 'admin' || _U.role === 'manager'
-    ? '<div class="action-btns">' +
-        '<button class="btn-action" onclick="openPenaltyForm(\'' + driverID + '\')">⚠️ Add Penalty</button>' +
-        '<button class="btn-action" onclick="openRewardForm(\'' + driverID + '\')">🏆 Add Reward</button>' +
-      '</div>'
-    : '') +
-
-  '</div>';
-}
-
-// ── ATTENDANCE (admin/manager) ────────────────────────────────
-function _renderAttendance(el) {
-  var att   = _DATA.attendance || [];
-  var today = att.filter(function(a){ return a.Date === _today(); });
-  var presentT = today.filter(function(a){ return a.Status === 'Present'; }).length;
-  var absentT  = today.filter(function(a){ return a.Status === 'Absent'; }).length;
-  var lateT    = today.filter(function(a){ return a.Status === 'Late'; }).length;
-
-  el.innerHTML = _pageHeader('📋 Attendance') +
-  _searchBar('attSearch', 'Search by driver name or date...', 'filterAttendance()') +
-  '<div class="content-pad">' +
-
-  '<div class="att-summary">' +
-    '<div class="as-item as-present"><div class="as-num">' + presentT + '</div><div class="as-label">Present</div></div>' +
-    '<div class="as-item as-absent"><div class="as-num">' + absentT + '</div><div class="as-label">Absent</div></div>' +
-    '<div class="as-item as-late"><div class="as-num">' + lateT + '</div><div class="as-label">Late</div></div>' +
-    '<div class="as-item as-total"><div class="as-num">' + today.length + '</div><div class="as-label">Total</div></div>' +
-  '</div>' +
-
-  _sectionHeader('Today — ' + _today()) +
-  (today.length === 0 ? _emptyState('📋', 'Aaj ka koi record nahi', 'Drivers ne abhi mark nahi kiya')
-    : _table(['Driver','Vehicle','In','Out','Status','Location'],
-        today.map(function(a){
-          return [_dname(a.DriverID), _vnum(a.VehicleID), a.InTime||'—', a.OutTime||'—',
-            _badge(a.Status), a.Location||'—'];
-        }))) +
-
-  _sectionHeader('All Records') +
-  '<div id="att-all-table">' +
-  _table(['Date','Driver','Status','In','Out','Location'],
-    att.slice(-30).reverse().map(function(a){
-      return [a.Date, _dname(a.DriverID), _badge(a.Status), a.InTime||'—', a.OutTime||'—', a.Location||'—'];
-    })) +
-  '</div>' +
-  '</div>';
-}
-
-function filterAttendance() {
-  var q = document.getElementById('attSearch').value.trim().toLowerCase();
-  var att = _DATA.attendance || [];
-  var filtered = q ? att.filter(function(a){
-    return _dname(a.DriverID).toLowerCase().includes(q) || (a.Date||'').includes(q);
-  }) : att;
-  _qs('#att-all-table').innerHTML = _table(['Date','Driver','Status','In','Out'],
-    filtered.slice(-30).reverse().map(function(a){
-      return [a.Date, _dname(a.DriverID), _badge(a.Status), a.InTime||'—', a.OutTime||'—'];
-    }));
-}
-
-// ── MY ATTENDANCE (driver) ────────────────────────────────────
-function _renderMyAttendance(el) {
-  var att = _DATA.myAttendance || [];
-  var monthAtt = att.filter(function(a){ return (a.Date||'').startsWith(_thisMonth()); });
-  var present = monthAtt.filter(function(a){ return a.Status === 'Present'; }).length;
-  var absent  = monthAtt.filter(function(a){ return a.Status === 'Absent'; }).length;
-  var late    = monthAtt.filter(function(a){ return a.Status === 'Late'; }).length;
-
-  el.innerHTML = _pageHeader('📋 My Attendance',
-    '<button class="btn-sm btn-primary" onclick="openAttModal()">+ Mark</button>') +
-  '<div class="content-pad">' +
-
-  '<div class="att-summary">' +
-    '<div class="as-item as-present"><div class="as-num">' + present + '</div><div class="as-label">Present</div></div>' +
-    '<div class="as-item as-absent"><div class="as-num">' + absent + '</div><div class="as-label">Absent</div></div>' +
-    '<div class="as-item as-late"><div class="as-num">' + late + '</div><div class="as-label">Late</div></div>' +
-    '<div class="as-item as-total"><div class="as-num">' + monthAtt.length + '</div><div class="as-label">Days Logged</div></div>' +
-  '</div>' +
-
-  _sectionHeader('This Month\'s Calendar') +
-  _attendanceCalendar(att) +
-
-  _sectionHeader('Attendance History') +
-  _table(['Date','Status','In Time','Out Time','Location'],
-    att.slice(-20).reverse().map(function(a){
-      return [a.Date, _badge(a.Status), a.InTime||'—', a.OutTime||'—', a.Location||'—'];
-    })) +
-  '</div>';
-}
-
-// ── INSPECTION LIST ───────────────────────────────────────────
-function _renderInspectionList(el) {
-  var ins = _DATA.inspections || [];
-  var today = ins.filter(function(i){ return i.Date === _today(); });
-  el.innerHTML = _pageHeader('🔍 Inspections') +
-  '<div class="content-pad">' +
-  '<div class="att-summary">' +
-    '<div class="as-item as-present"><div class="as-num">' + today.length + '</div><div class="as-label">Today</div></div>' +
-    '<div class="as-item as-total"><div class="as-num">' + ins.length + '</div><div class="as-label">Total</div></div>' +
-  '</div>' +
-  ins.slice(-15).reverse().map(function(i){
-    var failed = [];
-    if (i.FuelCheck !== 'Yes') failed.push('Fuel');
-    if (i.TyreCheck !== 'Yes') failed.push('Tyre');
-    if (i.InsuranceCheck !== 'Yes') failed.push('Ins');
-    if (i.PUCCheck !== 'Yes') failed.push('PUC');
-    return '<div class="list-card">' +
-      '<div class="lc-row">' +
-        '<div><b class="plate-tag">' + _vnum(i.VehicleID) + '</b> <span class="lc-sub">· ' + i.Date + '</span></div>' +
-        (failed.length > 0
-          ? '<span class="badge badge-late">⚠️ ' + failed.length + ' issues</span>'
-          : '<span class="badge badge-active">✅ All OK</span>') +
-      '</div>' +
-      '<div class="lc-meta">👤 ' + _dname(i.DriverID) + '</div>' +
-      (failed.length > 0 ? '<div class="lc-meta red">Issues: ' + failed.join(', ') + '</div>' : '') +
-      (i.Remarks ? '<div class="lc-meta">💬 ' + i.Remarks + '</div>' : '') +
-    '</div>';
-  }).join('') +
-  '</div>';
-}
-
-// ── INSPECTION FORM ───────────────────────────────────────────
-function _renderInspectionForm(el) {
-  var checks = APP_CONFIG.INSPECTION_CHECKS;
-  el.innerHTML = _pageHeader('🔍 Vehicle Inspection') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Date', 'date', 'ins-date', _today()) +
-  _fGroup('Vehicle ID', 'text', 'ins-vid', _U.assignedVehicle ? _U.assignedVehicle.VehicleID : '', 'VEH001') +
-  '<div class="checks-section">' +
-  checks.map(function(c){
-    return '<div class="check-row">' +
-      '<span class="cr-label">' + c.label + '</span>' +
-      '<div class="cr-toggle" id="tg-' + c.key + '">' +
-        '<button class="tg-yes active" onclick="setToggle(\'' + c.key + '\',\'Yes\',this)">Yes</button>' +
-        '<button class="tg-no" onclick="setToggle(\'' + c.key + '\',\'No\',this)">No</button>' +
-      '</div>' +
-    '</div>';
-  }).join('') +
-  '</div>' +
-  _fGroupTA('Remarks', 'ins-remarks', 'Koi issue ho toh yahan likho...') +
-  '<button class="btn-primary full-btn" onclick="submitInspection()">✅ Submit Inspection</button>' +
-  '</div></div>';
-  checks.forEach(function(c){ window['_toggle_' + c.key] = 'Yes'; });
-}
-
-// ── CLEANING LIST ─────────────────────────────────────────────
-function _renderCleaningList(el) {
-  var clns = _DATA.cleaning || [];
-  el.innerHTML = _pageHeader('🧽 Cleaning Logs') +
-  '<div class="content-pad">' +
-  clns.slice(-15).reverse().map(function(c){
-    var checks = ['ExteriorClean','InteriorClean','MatClean','DashboardClean','SeatClean','MirrorClean','TyrePolish','PerfumeAvailable'];
-    var doneCount = checks.filter(function(k){ return c[k] === 'Yes'; }).length;
-    var pct = Math.round(doneCount / checks.length * 100);
-    return '<div class="list-card">' +
-      '<div class="lc-row">' +
-        '<div><b class="plate-tag">' + _vnum(c.VehicleID) + '</b> <span class="lc-sub">· ' + c.Date + '</span></div>' +
-        '<span class="badge ' + (pct === 100 ? 'badge-active' : pct >= 60 ? 'badge-pending' : 'badge-absent') + '">' + pct + '%</span>' +
-      '</div>' +
-      '<div class="lc-meta">👤 ' + _dname(c.DriverID) + '</div>' +
-      '<div class="progress-bar"><div class="pb-fill" style="width:' + pct + '%;background:' + (pct===100?'#27AE60':pct>=60?'#F39C12':'#E74C3C') + '"></div></div>' +
-    '</div>';
-  }).join('') +
-  '</div>';
-}
-
-// ── CLEANING FORM ─────────────────────────────────────────────
-function _renderCleaningForm(el) {
-  var checks = APP_CONFIG.CLEANING_CHECKS;
-  el.innerHTML = _pageHeader('🧽 Vehicle Cleaning') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Date', 'date', 'cln-date', _today()) +
-  '<div class="checks-section">' +
-  checks.map(function(c){
-    return '<div class="check-row">' +
-      '<span class="cr-label">' + c.label + '</span>' +
-      '<div class="cr-toggle" id="tg-' + c.key + '">' +
-        '<button class="tg-yes active" onclick="setToggle(\'' + c.key + '\',\'Yes\',this)">Yes</button>' +
-        '<button class="tg-no" onclick="setToggle(\'' + c.key + '\',\'No\',this)">No</button>' +
-      '</div>' +
-    '</div>';
-  }).join('') +
-  '</div>' +
-  '<button class="btn-primary full-btn" onclick="submitCleaning()">🧽 Submit Cleaning Log</button>' +
-  '</div></div>';
-  checks.forEach(function(c){ window['_toggle_' + c.key] = 'Yes'; });
-}
-
-// ── FUEL LIST ─────────────────────────────────────────────────
-function _renderFuelList(el) {
-  var fuel = _DATA.fuel || [];
-  var totalAmt  = fuel.reduce(function(s,f){ return s + (parseFloat(f.Amount)||0); }, 0);
-  var totalLtrs = fuel.reduce(function(s,f){ return s + (parseFloat(f.FuelQty)||0); }, 0);
-  var avgMileage = fuel.filter(function(f){ return parseFloat(f.Mileage||0) > 0; });
-  var mileageAvg = avgMileage.length ? (avgMileage.reduce(function(s,f){ return s + parseFloat(f.Mileage); }, 0) / avgMileage.length).toFixed(1) : '—';
-
-  el.innerHTML = _pageHeader('⛽ Fuel Entries',
-    '<button class="btn-sm btn-primary" onclick="_showView(\'my_fuel\')">+ Add</button>') +
-  _searchBar('fuelSearch', 'Search by vehicle, driver, pump...', 'filterFuel()') +
-  '<div class="content-pad">' +
-
-  '<div class="hero-stats">' +
-    _heroStat('⛽', '₹' + _abbr(totalAmt), 'Total Spend', '#E67E22') +
-    _heroStat('💧', _abbr(totalLtrs) + 'L', 'Total Fuel', '#2980B9') +
-    _heroStat('📈', mileageAvg, 'Avg km/L', '#27AE60') +
-    _heroStat('📝', fuel.length, 'Entries', '#8E44AD') +
-  '</div>' +
-
-  '<div id="fuel-table">' +
-  _table(['Date','Vehicle','Driver','Qty','Amount','km/L','Pump'],
-    fuel.slice(-20).reverse().map(function(f){
-      var m = parseFloat(f.Mileage||0);
-      return [f.Date, _vnum(f.VehicleID), _dname(f.DriverID),
-        (f.FuelQty||'')+'L', '₹'+(f.Amount||''),
-        m > 0 ? (m < 7 ? '<span class="red">'+m+'</span>' : ''+m) : '—',
-        f.PumpName||'—'];
-    })) +
-  '</div></div>';
-}
-
-function filterFuel() {
-  var q = document.getElementById('fuelSearch').value.trim().toLowerCase();
-  var fuel = _DATA.fuel || [];
-  var filtered = q ? fuel.filter(function(f){
-    return _vnum(f.VehicleID).toLowerCase().includes(q) ||
-           _dname(f.DriverID).toLowerCase().includes(q) ||
-           (f.PumpName||'').toLowerCase().includes(q);
-  }) : fuel;
-  _qs('#fuel-table').innerHTML = _table(['Date','Vehicle','Driver','Qty','Amount','km/L','Pump'],
-    filtered.slice(-20).reverse().map(function(f){
-      var m = parseFloat(f.Mileage||0);
-      return [f.Date, _vnum(f.VehicleID), _dname(f.DriverID), (f.FuelQty||'')+'L', '₹'+(f.Amount||''),
-        m > 0 ? (m < 7 ? '<span class="red">'+m+'</span>' : ''+m) : '—', f.PumpName||'—'];
-    }));
-}
-
-// ── FUEL FORM ─────────────────────────────────────────────────
-function _renderFuelForm(el) {
-  var veh = _U.assignedVehicle;
-  el.innerHTML = _pageHeader('⛽ Add Fuel Entry') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Date', 'date', 'fuel-date', _today()) +
-  _fGroup('Vehicle ID', 'text', 'fuel-vid', veh ? veh.VehicleID : '', 'VEH001') +
-  _fGroup('Current KM Reading', 'number', 'fuel-km', '', '45000') +
-  _fGroup('Previous KM Reading', 'number', 'fuel-prevkm', veh ? (veh.CurrentKM||'') : '', '44500') +
-  _fGroup('Fuel Qty (Litres)', 'number', 'fuel-qty', '', '25') +
-  _fGroup('Amount (₹)', 'number', 'fuel-amt', '', '2500') +
-  _fGroup('Pump Name', 'text', 'fuel-pump', '', 'HPCL Station Name') +
-  '<div class="calc-preview" id="fuel-calc">—</div>' +
-  '<button class="btn-primary full-btn" onclick="submitFuel()">⛽ Save Fuel Entry</button>' +
-  '</div></div>';
-
-  // Live calc
-  ['fuel-qty','fuel-amt','fuel-km','fuel-prevkm'].forEach(function(id) {
-    var el2 = document.getElementById(id);
-    if (el2) el2.addEventListener('input', _updateFuelCalc);
-  });
-}
-
-function _updateFuelCalc() {
-  var qty = parseFloat(_v('fuel-qty')) || 0;
-  var amt = parseFloat(_v('fuel-amt')) || 0;
-  var km  = parseFloat(_v('fuel-km'))  || 0;
-  var prev= parseFloat(_v('fuel-prevkm'))|| 0;
-  var dist = km - prev;
-  var mil  = qty > 0 && dist > 0 ? (dist / qty).toFixed(1) : '—';
-  var rate = qty > 0 ? '₹' + (amt / qty).toFixed(2) + '/L' : '—';
-  var calc = document.getElementById('fuel-calc');
-  if (calc) {
-    calc.innerHTML = '📏 Distance: <b>' + dist + ' km</b> &nbsp;|&nbsp; 📈 Mileage: <b>' + mil + ' km/L</b> &nbsp;|&nbsp; 💰 Rate: <b>' + rate + '</b>';
-  }
-}
-
-// ── TRIPS ─────────────────────────────────────────────────────
-function _renderTrips(el) {
-  var trips = _DATA.trips || [];
-  var totalKM = trips.reduce(function(s,t){ return s + (parseFloat(t.TotalKM)||0); }, 0);
-  el.innerHTML = _pageHeader('🗺️ Trips',
-    '<button class="btn-sm btn-primary" onclick="_showView(\'my_trips\')">+ Add</button>') +
-  '<div class="content-pad">' +
-  '<div class="hero-stats">' +
-    _heroStat('🗺️', trips.length, 'Total Trips', '#2980B9') +
-    _heroStat('📏', _abbr(totalKM) + ' km', 'Total KM', '#8E44AD') +
-  '</div>' +
-  _table(['Date','Vehicle','Driver','From → To','KM','Material'],
-    trips.slice(-20).reverse().map(function(t){
-      return [t.Date, _vnum(t.VehicleID), _dname(t.DriverID),
-        (t.FromLocation||'?') + ' → ' + (t.ToLocation||'?'),
-        t.TotalKM||'—', t.MaterialType||'—'];
-    })) +
-  '</div>';
-}
-
-// ── TRIP FORM ─────────────────────────────────────────────────
-function _renderTripForm(el) {
-  var veh = _U.assignedVehicle;
-  var mats = APP_CONFIG.MATERIAL_TYPES.map(function(m){ return '<option>' + m + '</option>'; }).join('');
-  el.innerHTML = _pageHeader('🗺️ Log Trip') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Date', 'date', 'trp-date', _today()) +
-  _fGroup('Vehicle ID', 'text', 'trp-vid', veh ? veh.VehicleID : '') +
-  _fGroup('From Location', 'text', 'trp-from', '', 'Delhi Warehouse') +
-  _fGroup('To Location', 'text', 'trp-to', '', 'Gurgaon Hub') +
-  '<div class="f-group"><label>Material Type</label><select id="trp-mat">' + mats + '</select></div>' +
-  _fGroup('Weight (MT)', 'number', 'trp-wt', '', '5.5') +
-  _fGroup('Start KM', 'number', 'trp-skm', '', '45000') +
-  _fGroup('End KM', 'number', 'trp-ekm', '', '45350') +
-  _fGroup('Remarks', 'text', 'trp-rem', '', 'Optional') +
-  '<button class="btn-primary full-btn" onclick="submitTrip()">🗺️ Submit Trip</button>' +
-  '</div></div>';
-}
-
-// ── SERVICES ──────────────────────────────────────────────────
-function _renderServices(el) {
-  var svc = _DATA.services || [];
-  var pending   = svc.filter(function(s){ return s.Status !== 'Completed'; });
-  var completed = svc.filter(function(s){ return s.Status === 'Completed'; });
-  var totalCost = svc.reduce(function(s,x){ return s + (parseFloat(x.Amount)||0); }, 0);
-
-  el.innerHTML = _pageHeader('🔧 Services',
-    '<button class="btn-sm btn-primary" onclick="_showView(\'service_form\')">+ Add</button>') +
-  '<div class="content-pad">' +
-  '<div class="hero-stats">' +
-    _heroStat('🔧', pending.length, 'Pending', '#D51515') +
-    _heroStat('✅', completed.length, 'Completed', '#27AE60') +
-    _heroStat('💸', '₹' + _abbr(totalCost), 'Total Cost', '#E67E22') +
-  '</div>' +
-
-  (pending.length ? _sectionHeader('In Progress') +
-    pending.map(function(s){
-      return '<div class="list-card">' +
-        '<div class="lc-row"><b class="plate-tag">' + _vnum(s.VehicleID) + '</b>' + _badge(s.Status) + '</div>' +
-        '<div class="lc-meta">🔧 ' + (s.ServiceType||'—') + ' · 🏪 ' + (s.GarageName||'—') + '</div>' +
-        '<div class="lc-meta">📅 ' + (s.ServiceDate||'—') + ' · 💰 ₹' + (s.Amount||0) + '</div>' +
-        '<div class="lc-meta">Issue: ' + (s.Issue||'—') + '</div>' +
-        (s.NextServiceDate ? '<div class="lc-meta">Next: ' + s.NextServiceDate + ' / ' + (s.NextServiceKM||'—') + ' KM</div>' : '') +
-      '</div>';
-    }).join('') : '') +
-
-  _sectionHeader('All Services') +
-  _table(['Date','Vehicle','Type','Issue','Amount','Status'],
-    svc.slice(-15).reverse().map(function(s){
-      return [s.ServiceDate||'—', _vnum(s.VehicleID), s.ServiceType||'—',
-        s.Issue||'—', '₹'+(s.Amount||0), _badge(s.Status)];
-    })) +
-  '</div>';
-}
-
-// ── SERVICE FORM ──────────────────────────────────────────────
-function _renderServiceForm(el) {
-  var types = APP_CONFIG.SERVICE_TYPES.map(function(t){ return '<option>' + t + '</option>'; }).join('');
-  var vehOpts = (_DATA.vehicles||[]).map(function(v){ return '<option value="' + v.VehicleID + '">' + v.VehicleNo + ' — ' + (v.Brand||'') + '</option>'; }).join('');
-  el.innerHTML = _pageHeader('🔧 Log Service') +
-  '<div class="content-pad"><div class="form-card">' +
-  '<div class="f-group"><label>Vehicle</label><select id="svc-vid">' + vehOpts + '</select></div>' +
-  '<div class="f-group"><label>Service Type</label><select id="svc-type">' + types + '</select></div>' +
-  _fGroup('Service Date', 'date', 'svc-date', _today()) +
-  _fGroup('Garage Name', 'text', 'svc-garage', '', 'Expert Auto, Faridabad') +
-  _fGroup('Issue / Work Done', 'text', 'svc-issue', '', 'Oil change + filter') +
-  _fGroup('Amount (₹)', 'number', 'svc-amt', '', '4000') +
-  _fGroup('Service KM Reading', 'number', 'svc-km', '', '45000') +
-  _fGroup('Next Service Date', 'date', 'svc-ndate', '') +
-  _fGroup('Next Service KM', 'number', 'svc-nkm', '', '51000') +
-  _fGroup('Technician Name', 'text', 'svc-tech', '', 'Raju Mechanic') +
-  '<button class="btn-primary full-btn" onclick="submitService()">🔧 Save Service Record</button>' +
-  '</div></div>';
-}
-
-// ── EXPENSES ──────────────────────────────────────────────────
-function _renderExpenses(el) {
-  var exp = _DATA.expenses || [];
-  var thisMonth = exp.filter(function(e){ return (e.Date||'').startsWith(_thisMonth()); });
-  var byType = {};
-  exp.forEach(function(e){ byType[e.ExpenseType||'Other'] = (byType[e.ExpenseType||'Other']||0) + (parseFloat(e.Amount)||0); });
-  var total = exp.reduce(function(s,e){ return s + (parseFloat(e.Amount)||0); }, 0);
-  var monthTotal = thisMonth.reduce(function(s,e){ return s + (parseFloat(e.Amount)||0); }, 0);
-
-  el.innerHTML = _pageHeader('💸 Expenses',
-    '<button class="btn-sm btn-primary" onclick="_showView(\'my_expenses\')">+ Add</button>') +
-  '<div class="content-pad">' +
-  '<div class="hero-stats">' +
-    _heroStat('💸', '₹' + _abbr(monthTotal), 'This Month', '#E74C3C') +
-    _heroStat('📊', '₹' + _abbr(total), 'All Time', '#2980B9') +
-    _heroStat('📝', exp.length, 'Entries', '#8E44AD') +
-  '</div>' +
-
-  // By type breakdown
-  _sectionHeader('Expense Breakdown') +
-  '<div class="breakdown-list">' +
-  Object.keys(byType).map(function(type){
-    var pct = total > 0 ? Math.round(byType[type] / total * 100) : 0;
-    return '<div class="bl-item">' +
-      '<div class="bl-row"><span>' + type + '</span><span>₹' + _abbr(byType[type]) + ' (' + pct + '%)</span></div>' +
-      '<div class="progress-bar"><div class="pb-fill" style="width:' + pct + '%"></div></div>' +
-    '</div>';
-  }).join('') +
-  '</div>' +
-
-  _searchBar('expSearch', 'Search by vehicle, type...', 'filterExpenses()') +
-  '<div id="exp-table">' +
-  _table(['Date','Vehicle','Type','Amount','Mode','By'],
-    exp.slice(-20).reverse().map(function(e){
-      return [e.Date, _vnum(e.VehicleID), e.ExpenseType||'—',
-        '₹'+(e.Amount||0), e.PaymentMode||'—', e.ApprovedBy||'—'];
-    })) +
-  '</div></div>';
-}
-
-function filterExpenses() {
-  var q = document.getElementById('expSearch').value.trim().toLowerCase();
-  var exp = _DATA.expenses || [];
-  var filtered = q ? exp.filter(function(e){
-    return _vnum(e.VehicleID).toLowerCase().includes(q) || (e.ExpenseType||'').toLowerCase().includes(q);
-  }) : exp;
-  _qs('#exp-table').innerHTML = _table(['Date','Vehicle','Type','Amount','Mode','By'],
-    filtered.slice(-20).reverse().map(function(e){
-      return [e.Date, _vnum(e.VehicleID), e.ExpenseType||'—', '₹'+(e.Amount||0), e.PaymentMode||'—', e.ApprovedBy||'—'];
-    }));
-}
-
-// ── EXPENSE FORM ──────────────────────────────────────────────
-function _renderExpenseForm(el) {
-  var types = APP_CONFIG.EXPENSE_TYPES.map(function(t){ return '<option>' + t + '</option>'; }).join('');
-  var modes = APP_CONFIG.PAYMENT_MODES.map(function(m){ return '<option>' + m + '</option>'; }).join('');
-  var veh = _U.assignedVehicle;
-  el.innerHTML = _pageHeader('💸 Add Expense') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Date', 'date', 'exp-date', _today()) +
-  _fGroup('Vehicle ID', 'text', 'exp-vid', veh ? veh.VehicleID : '') +
-  '<div class="f-group"><label>Expense Type</label><select id="exp-type">' + types + '</select></div>' +
-  _fGroup('Amount (₹)', 'number', 'exp-amt', '', '500') +
-  '<div class="f-group"><label>Payment Mode</label><select id="exp-mode">' + modes + '</select></div>' +
-  _fGroup('Remarks', 'text', 'exp-rem', '', 'Optional') +
-  '<button class="btn-primary full-btn" onclick="submitExpense()">💸 Submit Expense</button>' +
-  '</div></div>';
-}
-
-// ── FASTAG ────────────────────────────────────────────────────
-function _renderFastag(el) {
-  var txns = _DATA.fastag || [];
-  var vehicles = _DATA.vehicles || [];
-  var lowBal = vehicles.filter(function(v){ return parseFloat(v.FastagBalance||0) < 300; });
-
-  el.innerHTML = _pageHeader('🏷️ Fastag',
-    '<button class="btn-sm btn-primary" onclick="_showView(\'fastag_form\')">+ Recharge</button>') +
-  '<div class="content-pad">' +
-
-  (lowBal.length ? '<div class="alert-card danger"><div class="ac-title">⚠️ Low Fastag Balance</div>' +
-    lowBal.map(function(v){ return '<div class="ac-row"><b class="plate-tag">' + v.VehicleNo + '</b> — ₹' + (v.FastagBalance||0) + '</div>'; }).join('') + '</div>' : '') +
-
-  _sectionHeader('Vehicle Fastag Balances') +
-  '<div class="fastag-grid">' +
-  vehicles.map(function(v){
-    var bal = parseFloat(v.FastagBalance||0);
-    var cls = bal < 300 ? '#E74C3C' : bal < 600 ? '#F39C12' : '#27AE60';
-    return '<div class="ft-card" style="border-top-color:' + cls + '">' +
-      '<div class="ft-plate">' + (v.VehicleNo||'—') + '</div>' +
-      '<div class="ft-no">' + (v.FastagNo||'—') + '</div>' +
-      '<div class="ft-bal" style="color:' + cls + '">₹' + bal.toFixed(0) + '</div>' +
-      '<div class="ft-label">' + (bal < 300 ? '🔴 Low!' : bal < 600 ? '🟡 OK' : '🟢 Good') + '</div>' +
-    '</div>';
-  }).join('') +
-  '</div>' +
-
-  _sectionHeader('Recharge History') +
-  _table(['Date','Vehicle','Opening','Recharge','Closing','Remarks'],
-    txns.slice(-15).reverse().map(function(t){
-      return [t.Date, _vnum(t.VehicleID), '₹'+(t.OpeningBalance||0), '₹'+(t.RechargeAmount||0), '₹'+(t.ClosingBalance||0), t.Remarks||'—'];
-    })) +
-  '</div>';
-}
-
-// ── FASTAG FORM ───────────────────────────────────────────────
-function _renderFastagForm(el) {
-  var vehOpts = (_DATA.vehicles||[]).map(function(v){
-    return '<option value="' + v.VehicleID + '">' + v.VehicleNo + ' (Bal: ₹' + (v.FastagBalance||0) + ')</option>';
-  }).join('');
-  el.innerHTML = _pageHeader('🏷️ Fastag Recharge') +
-  '<div class="content-pad"><div class="form-card">' +
-  '<div class="f-group"><label>Vehicle</label><select id="ft-vid" onchange="updateFastagBal(this)">' + vehOpts + '</select></div>' +
-  '<div class="f-group"><label>Opening Balance (₹)</label><input type="number" id="ft-open" placeholder="auto-fills" readonly style="background:#f4f4f4"></div>' +
-  _fGroup('Recharge Amount (₹)', 'number', 'ft-rch', '', '500') +
-  _fGroup('Date', 'date', 'ft-date', _today()) +
-  _fGroup('Remarks', 'text', 'ft-rem', '', 'Quarterly top-up') +
-  '<div class="calc-preview" id="ft-calc">—</div>' +
-  '<button class="btn-primary full-btn" onclick="submitFastag()">🏷️ Save Recharge</button>' +
-  '</div></div>';
-
-  setTimeout(function() {
-    var sel = document.getElementById('ft-vid');
-    if (sel) updateFastagBal(sel);
-  }, 50);
-}
-
-function updateFastagBal(sel) {
-  var vid = sel.value;
-  var v = (_DATA.vehicles||[]).find(function(x){ return x.VehicleID === vid; });
-  var openEl = document.getElementById('ft-open');
-  if (openEl && v) { openEl.value = parseFloat(v.FastagBalance||0).toFixed(0); _updateFastagCalc(); }
-  document.getElementById('ft-rch') && document.getElementById('ft-rch').addEventListener('input', _updateFastagCalc);
-}
-
-function _updateFastagCalc() {
-  var open = parseFloat(_v('ft-open')) || 0;
-  var rch  = parseFloat(_v('ft-rch'))  || 0;
-  var calc = document.getElementById('ft-calc');
-  if (calc) calc.innerHTML = 'Opening: ₹' + open + ' + Recharge: ₹' + rch + ' = <b>New Balance: ₹' + (open+rch).toFixed(0) + '</b>';
-}
-
-// ── KM LOGS ───────────────────────────────────────────────────
-function _renderKMLogs(el) {
-  var logs = _DATA.kmLogs || [];
-  el.innerHTML = _pageHeader('📏 KM Logs',
-    '<button class="btn-sm btn-primary" onclick="_showView(\'my_kmlogs\')">+ Add</button>') +
-  '<div class="content-pad">' +
-  _table(['Date','Vehicle','Odometer','By','Remarks'],
-    logs.slice(-20).reverse().map(function(l){
-      return [l.Date, _vnum(l.VehicleID), (l.OdometerReading||'—') + ' km', l.EnteredBy||'—', l.Remarks||'—'];
-    })) +
-  '</div>';
-}
-
-function _renderKMLogForm(el) {
-  var veh = _U.assignedVehicle;
-  el.innerHTML = _pageHeader('📏 KM Entry') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Date', 'date', 'km-date', _today()) +
-  _fGroup('Vehicle ID', 'text', 'km-vid', veh ? veh.VehicleID : '') +
-  _fGroup('Odometer Reading (KM)', 'number', 'km-odo', veh ? (veh.CurrentKM||'') : '', '45000') +
-  _fGroup('Remarks', 'text', 'km-rem', '', 'Morning reading') +
-  '<button class="btn-primary full-btn" onclick="submitKMLog()">📏 Save KM Entry</button>' +
-  '</div></div>';
-}
-
-// ── DISPATCH ──────────────────────────────────────────────────
-function _renderDispatch(el) {
-  var disp = _DATA.dispatch || [];
-  var inTransit = disp.filter(function(d){ return d.Status === 'In Transit'; }).length;
-  el.innerHTML = _pageHeader('📦 Dispatch') +
-  '<div class="content-pad">' +
-  '<div class="hero-stats">' +
-    _heroStat('🚛', inTransit, 'In Transit', '#E67E22') +
-    _heroStat('✅', disp.filter(function(d){ return d.Status === 'Delivered'; }).length, 'Delivered', '#27AE60') +
-    _heroStat('📦', disp.length, 'Total', '#2980B9') +
-  '</div>' +
-  disp.slice(-15).reverse().map(function(d){
-    return '<div class="list-card">' +
-      '<div class="lc-row"><b>' + (d.CustomerName||'—') + '</b>' + _badge(d.Status) + '</div>' +
-      '<div class="lc-meta">📦 ' + (d.Material||'—') + ' · ' + (d.Weight||0) + ' MT · 📄 ' + (d.InvoiceNo||'—') + '</div>' +
-      '<div class="lc-meta">📅 Loading: ' + (d.LoadingDate||'—') + ' → Delivery: ' + (d.DeliveryDate||'—') + '</div>' +
-    '</div>';
-  }).join('') +
-  '</div>';
-}
-
-// ── DOCUMENTS ─────────────────────────────────────────────────
-function _renderDocuments(el) {
-  var docs = _DATA.documents || [];
-  var expiringSoon = docs.filter(function(d){ return _daysTo(d.ExpiryDate) <= 30; });
-  el.innerHTML = _pageHeader('📄 Documents') +
-  '<div class="content-pad">' +
-  (expiringSoon.length ? '<div class="alert-card danger"><div class="ac-title">⚠️ Expiring within 30 days</div>' +
-    expiringSoon.map(function(d){ return '<div class="ac-row"><b class="plate-tag">' + _vnum(d.VehicleID) + '</b> — ' + d.DocumentType + ': ' + _daysTo(d.ExpiryDate) + 'd</div>'; }).join('') + '</div>' : '') +
-  _table(['Vehicle','Type','Doc No','Expiry','Status'],
-    docs.map(function(d){
-      var dd = _daysTo(d.ExpiryDate);
-      return [_vnum(d.VehicleID), d.DocumentType, d.DocumentNumber||'—',
-        '<span class="' + (dd <= 30 ? 'red' : '') + '">' + (d.ExpiryDate||'—') + (dd <= 30 && dd >= 0 ? ' (' + dd + 'd)' : '') + '</span>',
-        _badge(d.Status)];
-    })) +
-  '</div>';
-}
-
-// ── REMINDERS ─────────────────────────────────────────────────
-function _renderReminders(el) {
-  var rem = _DATA.reminders || [];
-  var high = rem.filter(function(r){ return r.Priority === 'High' && r.Status === 'Pending'; });
-  el.innerHTML = _pageHeader('🔔 Reminders') +
-  '<div class="content-pad">' +
-  (high.length ? '<div class="alert-card danger"><div class="ac-title">🔴 High Priority (' + high.length + ')</div>' +
-    high.map(function(r){ return '<div class="ac-row"><b class="plate-tag">' + _vnum(r.VehicleID) + '</b> — ' + r.ReminderType + ' on ' + r.ReminderDate + '</div>'; }).join('') + '</div>' : '') +
-  _table(['Vehicle','Type','Date','Priority','Status'],
-    rem.map(function(r){
-      return [_vnum(r.VehicleID), r.ReminderType, r.ReminderDate, _badge(r.Priority), _badge(r.Status)];
-    })) +
-  '</div>';
-}
-
-// ── MAINTENANCE ───────────────────────────────────────────────
-function _renderMaintenance(el) {
-  var maint = _DATA.maintenance || [];
-  el.innerHTML = _pageHeader('🛠️ Maintenance') +
-  '<div class="content-pad">' +
-  maint.map(function(m){
-    var daysLeft = _daysTo(m.NextDueDate);
-    var col = daysLeft <= 0 ? '#E74C3C' : daysLeft <= 15 ? '#F39C12' : '#27AE60';
-    return '<div class="list-card">' +
-      '<div class="lc-row">' +
-        '<div><b class="plate-tag">' + _vnum(m.VehicleID) + '</b> <span class="lc-sub">· ' + (m.MaintenanceType||'—') + '</span></div>' +
-        _badge(m.Status) +
-      '</div>' +
-      '<div class="lc-meta">Last: ' + (m.LastDoneDate||'—') + ' @ ' + (m.LastDoneKM||'—') + ' KM</div>' +
-      '<div class="lc-meta" style="color:' + col + '">Next: ' + (m.NextDueDate||'—') + ' / ' + (m.NextDueKM||'—') + ' KM' +
-        (daysLeft <= 30 ? ' <b>(' + daysLeft + 'd)</b>' : '') + '</div>' +
-      '<div class="progress-bar"><div class="pb-fill" style="width:' + Math.min(100, Math.max(0, 100 - daysLeft)) + '%;background:' + col + '"></div></div>' +
-    '</div>';
-  }).join('') +
-  '</div>';
-}
-
-// ── PENALTIES ─────────────────────────────────────────────────
-function _renderPenalties(el) {
-  var pens = _DATA.penalties || [];
-  var total = pens.reduce(function(s,p){ return s + (parseFloat(p.Amount)||0); }, 0);
-  el.innerHTML = _pageHeader('⚠️ Penalties') +
-  '<div class="content-pad">' +
-  '<div class="hero-stats">' +
-    _heroStat('⚠️', pens.length, 'Total', '#E74C3C') +
-    _heroStat('💸', '₹' + _abbr(total), 'Amount', '#E74C3C') +
-    _heroStat('⏳', pens.filter(function(p){ return p.Status === 'Pending'; }).length, 'Pending', '#F39C12') +
-  '</div>' +
-  _table(['Date','Driver','Reason','Amount','Status'],
-    pens.slice(-15).reverse().map(function(p){
-      return [p.Date, _dname(p.DriverID), p.Reason||'—', '₹'+(p.Amount||0), _badge(p.Status)];
-    })) +
-  '</div>';
-}
-
-// ── REWARDS ───────────────────────────────────────────────────
-function _renderRewards(el) {
-  var rwds = _DATA.rewards || [];
-  var total = rwds.reduce(function(s,r){ return s + (parseFloat(r.Amount)||0); }, 0);
-  el.innerHTML = _pageHeader('🏆 Rewards') +
-  '<div class="content-pad">' +
-  '<div class="hero-stats">' +
-    _heroStat('🏆', rwds.length, 'Total', '#F1C40F') +
-    _heroStat('💰', '₹' + _abbr(total), 'Amount', '#27AE60') +
-  '</div>' +
-  _table(['Date','Driver','Reason','Amount','Status'],
-    rwds.slice(-15).reverse().map(function(r){
-      return [r.Date, _dname(r.DriverID), r.Reason||'—', '₹'+(r.Amount||0), _badge(r.Status)];
-    })) +
-  '</div>';
-}
-
-// ── AUDIT LOG ─────────────────────────────────────────────────
-function _renderAuditLog(el) {
-  var logs = _DATA.auditLogs || [];
-  el.innerHTML = _pageHeader('📝 Audit Log') +
-  _searchBar('aulSearch', 'Search by module, action, user...', 'filterAudit()') +
-  '<div class="content-pad" id="aul-wrap">' +
-  _table(['Date/Time','Module','Action','Record','By'],
-    logs.slice(-40).reverse().map(function(l){
-      return [l.DateTime, l.Module, l.Action, l.RecordID, l.PerformedBy];
-    })) +
-  '</div>';
-}
-
-function filterAudit() {
-  var q = document.getElementById('aulSearch').value.trim().toLowerCase();
-  var logs = _DATA.auditLogs || [];
-  var filtered = q ? logs.filter(function(l){
-    return (l.Module||'').toLowerCase().includes(q) ||
-           (l.Action||'').toLowerCase().includes(q) ||
-           (l.PerformedBy||'').toLowerCase().includes(q);
-  }) : logs;
-  _qs('#aul-wrap').innerHTML = _table(['Date/Time','Module','Action','Record','By'],
-    filtered.slice(-40).reverse().map(function(l){
-      return [l.DateTime, l.Module, l.Action, l.RecordID, l.PerformedBy];
-    }));
-}
-
-// ── USERS ─────────────────────────────────────────────────────
-function _renderUsers(el) {
-  var users = _DATA.users || [];
-  el.innerHTML = _pageHeader('👥 Users') +
-  '<div class="content-pad">' +
-  users.map(function(u){
-    var perms = String(u.Permissions||'').split(',').filter(Boolean);
-    return '<div class="list-card">' +
-      '<div class="lc-row">' +
-        '<div class="dc-left">' +
-          '<div class="dc-avatar" style="background:' + _nameColor(u.Name) + ';width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:.85rem">' + _initials(u.Name) + '</div>' +
-        '</div>' +
-        '<div style="flex:1;margin-left:.6rem">' +
-          '<b>' + (u.Name||'—') + '</b>' +
-          '<div class="lc-meta">' + (u.Email||'—') + ' · ' + (u.Mobile||'—') + '</div>' +
-        '</div>' +
-        _badge(u.Role) +
-      '</div>' +
-      '<div class="lc-meta" style="margin-top:.3rem">✅ ' + perms.slice(0,4).join(' · ') + (perms.length > 4 ? ' +' + (perms.length-4) : '') + '</div>' +
-      '<div class="lc-meta">' + _badge(u.Status) + ' · Last Login: ' + (u.LastLogin||'—') + '</div>' +
-    '</div>';
-  }).join('') +
-  '</div>';
-}
-
-// ── VEHICLE FORM ──────────────────────────────────────────────
-function _renderVehicleForm(el) {
-  var types  = APP_CONFIG.VEHICLE_TYPES.map(function(t){ return '<option>' + t + '</option>'; }).join('');
-  var fuels  = APP_CONFIG.FUEL_TYPES.map(function(f){ return '<option>' + f + '</option>'; }).join('');
-  var owns   = APP_CONFIG.OWNERSHIP_TYPES.map(function(o){ return '<option>' + o + '</option>'; }).join('');
-  var drvOpts = (_DATA.drivers||[]).map(function(d){ return '<option value="' + d.DriverID + '">' + d.Name + '</option>'; }).join('');
-  el.innerHTML = _pageHeader('🚗 Add Vehicle') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Vehicle Number', 'text', 'nv-no', '', 'UP36B0000') +
-  '<div class="f-group"><label>Vehicle Type</label><select id="nv-type">' + types + '</select></div>' +
-  '<div class="f-group"><label>Fuel Type</label><select id="nv-fuel">' + fuels + '</select></div>' +
-  '<div class="f-group"><label>Ownership</label><select id="nv-own">' + owns + '</select></div>' +
-  _fGroup('Brand', 'text', 'nv-brand', '', 'Maruti') +
-  _fGroup('Model', 'text', 'nv-model', '', 'Swift') +
-  _fGroup('Registration No', 'text', 'nv-reg', '', 'MH19B0000') +
-  _fGroup('Engine No', 'text', 'nv-eng', '', '') +
-  _fGroup('Chassis No', 'text', 'nv-chs', '', '') +
-  _fGroup('Current KM', 'number', 'nv-km', '', '0') +
-  _fGroup('Insurance Expiry', 'date', 'nv-ins', '') +
-  _fGroup('PUC Expiry', 'date', 'nv-puc', '') +
-  _fGroup('Fastag No', 'text', 'nv-ft', '', '') +
-  _fGroup('Fastag Balance (₹)', 'number', 'nv-ftbal', '', '0') +
-  '<div class="f-group"><label>Assign Driver</label><select id="nv-drv"><option value="">— None —</option>' + drvOpts + '</select></div>' +
-  '<button class="btn-primary full-btn" onclick="submitVehicle()">🚗 Add Vehicle</button>' +
-  '</div></div>';
-}
-
-// ── DRIVER FORM ───────────────────────────────────────────────
-function _renderDriverForm(el) {
-  var blood = APP_CONFIG.BLOOD_GROUPS.map(function(b){ return '<option>' + b + '</option>'; }).join('');
-  el.innerHTML = _pageHeader('👤 Add Driver') +
-  '<div class="content-pad"><div class="form-card">' +
-  _fGroup('Full Name', 'text', 'nd-name', '', 'Ramesh Kumar') +
-  _fGroup('Mobile', 'tel', 'nd-mob', '', '9876543210') +
-  _fGroup('Email (for login)', 'email', 'nd-email', '', 'ramesh@ishasteels.com') +
-  _fGroup('Password (for app)', 'text', 'nd-pass', '', 'Driver@1234') +
-  _fGroup('Address', 'text', 'nd-addr', '', '') +
-  _fGroup('License No', 'text', 'nd-lic', '', '') +
-  _fGroup('License Expiry', 'date', 'nd-licexp', '') +
-  _fGroup('Aadhaar No', 'text', 'nd-aadh', '', '0000 0000 0000') +
-  '<div class="f-group"><label>Blood Group</label><select id="nd-blood">' + blood + '</select></div>' +
-  _fGroup('Emergency Contact', 'tel', 'nd-emg', '', '9876543211') +
-  _fGroup('Joining Date', 'date', 'nd-join', _today()) +
-  _fGroup('Monthly Salary (₹)', 'number', 'nd-sal', '', '25000') +
-  '<button class="btn-primary full-btn" onclick="submitDriver()">👤 Add Driver</button>' +
-  '</div></div>';
-}
-
-// ── SETTINGS ──────────────────────────────────────────────────
-function _renderSettings(el) {
-  el.innerHTML = _pageHeader('⚙️ Settings') +
-  '<div class="content-pad">' +
-
-  // User profile card
-  '<div class="settings-profile">' +
-    '<div class="sp-avatar" style="background:' + _nameColor(_U.name) + '">' + _initials(_U.name) + '</div>' +
-    '<div class="sp-info">' +
-      '<div class="sp-name">' + _U.name + '</div>' +
-      '<div class="sp-email">' + _U.email + '</div>' +
-      _badge(_U.role) +
-    '</div>' +
-  '</div>' +
-
-  _sectionHeader('App Info') +
-  '<div class="settings-list">' +
-    _settingRow('🏢', 'Company', 'Isha Steels Enterprises') +
-    _settingRow('📱', 'App Version', APP_CONFIG.APP_VERSION) +
-    _settingRow('🔄', 'Auto Refresh', APP_CONFIG.REFRESH_MINS + ' minutes') +
-    _settingRow('👤', 'Your Role', _cap(_U.role)) +
-    _settingRow('🔑', 'User ID', _U.userID||'—') +
-  '</div>' +
-
-  _sectionHeader('Your Permissions') +
-  '<div class="perm-list">' +
-  (_U.permissions||[]).filter(Boolean).map(function(p){ return '<span class="perm-badge">' + p + '</span>'; }).join('') +
-  '</div>' +
-
-  _sectionHeader('Cache') +
-  '<div class="settings-list">' +
-    '<div class="setting-row" onclick="_refreshData();_toast(\'Data refreshed!\',\'success\')">' +
-      '<div class="sr-icon">🔄</div><div class="sr-label">Refresh App Data</div><div class="sr-arrow">›</div>' +
-    '</div>' +
-    '<div class="setting-row" onclick="_clearCacheAndReload()">' +
-      '<div class="sr-icon">🗑️</div><div class="sr-label">Clear Cache & Reload</div><div class="sr-arrow">›</div>' +
-    '</div>' +
-  '</div>' +
-
-  '<button class="btn-danger full-btn" style="margin-top:1.5rem" onclick="_signOut()">🚪 Logout</button>' +
-  '</div>';
-}
-
-function _settingRow(icon, label, val) {
-  return '<div class="setting-row"><div class="sr-icon">' + icon + '</div><div class="sr-label">' + label + '</div><div class="sr-val">' + val + '</div></div>';
-}
-
-function _clearCacheAndReload() {
-  _clearSession();
-  if ('caches' in window) caches.keys().then(function(k){ k.forEach(function(c){ caches.delete(c); }); });
-  window.location.reload();
-}
-
-// ═══════════════════════════════════════════════════════════════
-// MODALS
-// ═══════════════════════════════════════════════════════════════
-
-function openAttModal() {
-  var veh = _U.assignedVehicle;
-  var now = new Date();
-  var time = _pad(now.getHours()) + ':' + _pad(now.getMinutes());
-  _modal('📋 Mark Attendance',
-    '<div class="form-card" style="box-shadow:none;padding:0">' +
-    _fGroup('Date', 'date', 'att-date', _today()) +
-    '<div class="f-group"><label>Status</label><select id="att-status">' +
-      '<option>Present</option><option>Late</option><option>Absent</option>' +
-    '</select></div>' +
-    _fGroup('Location', 'text', 'att-loc', '', 'Delhi HQ') +
-    '<div class="att-btn-row">' +
-      '<button class="btn-att-in" onclick="submitAttendance(\'in\')">🟢 Mark IN (' + time + ')</button>' +
-      '<button class="btn-att-out" onclick="submitAttendance(\'out\')">🔴 Mark OUT (' + time + ')</button>' +
-    '</div></div>'
-  );
-}
-
-function openAllModules() {
-  var role = _U.role;
-  var modules = APP_CONFIG.ROLE_MODULES[role] || [];
-  _modal('All Modules',
-    '<div class="module-grid">' +
-    modules.map(function(key) {
-      var m = APP_CONFIG.MODULES[key]; if (!m) return '';
-      return '<div class="module-tile" onclick="closeModal();_showView(\'' + key + '\')" style="--mc:' + m.color + '">' +
-        '<div class="mt-icon">' + m.icon + '</div>' +
-        '<div class="mt-label">' + m.label + '</div>' +
-      '</div>';
-    }).join('') +
-    '</div>' +
-    '<div class="module-tile" onclick="closeModal();_showView(\'settings\')" style="margin-top:.6rem;--mc:#7F8C8D">' +
-      '<div class="mt-icon">⚙️</div><div class="mt-label">Settings</div>' +
-    '</div>'
-  );
-}
-
-function openPenaltyForm(driverID) {
-  _modal('⚠️ Add Penalty',
-    '<div class="form-card" style="box-shadow:none;padding:0">' +
-    _fGroup('Date', 'date', 'pnl-date', _today()) +
-    '<input type="hidden" id="pnl-driver" value="' + (driverID||'') + '">' +
-    _fGroup('Reason', 'text', 'pnl-reason', '', 'Late arrival') +
-    _fGroup('Amount (₹)', 'number', 'pnl-amt', '', '500') +
-    '<button class="btn-primary full-btn" onclick="submitPenalty()">⚠️ Add Penalty</button></div>'
-  );
-}
-
-function openRewardForm(driverID) {
-  _modal('🏆 Add Reward',
-    '<div class="form-card" style="box-shadow:none;padding:0">' +
-    _fGroup('Date', 'date', 'rwd-date', _today()) +
-    '<input type="hidden" id="rwd-driver" value="' + (driverID||'') + '">' +
-    _fGroup('Reason', 'text', 'rwd-reason', '', 'Best fuel efficiency') +
-    _fGroup('Amount (₹)', 'number', 'rwd-amt', '', '1000') +
-    '<button class="btn-primary full-btn" onclick="submitReward()">🏆 Give Reward</button></div>'
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════
-// FORM SUBMIT FUNCTIONS
-// ═══════════════════════════════════════════════════════════════
-
-function submitAttendance(inOrOut) {
-  var veh = _U.assignedVehicle;
-  var now = new Date();
-  var time = _pad(now.getHours()) + ':' + _pad(now.getMinutes());
-  var data = {
-    date:      _v('att-date') || _today(),
-    vehicleID: veh ? veh.VehicleID : '',
-    inTime:    inOrOut === 'in'  ? time : '',
-    outTime:   inOrOut === 'out' ? time : '',
-    status:    _v('att-status') || 'Present',
-    location:  _v('att-loc') || ''
-  };
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(function(pos) {
-      data.gps = pos.coords.latitude + ',' + pos.coords.longitude;
-      _submitModal('addAttendance', data, '✅ Attendance marked!', 'my_attendance');
-    }, function() {
-      _submitModal('addAttendance', data, '✅ Attendance marked (no GPS)!', 'my_attendance');
-    }, { timeout: 5000 });
+  html+='<div>';
+  html+='<div class="sec-hdr"><i class="fas fa-users" style="color:var(--G)"></i>Today\'s Attendance</div>';
+  if(!todayAtt.length){
+    html+='<div style="color:var(--tx3);font-size:13px;padding:16px 0">No records yet today.</div>';
   } else {
-    _submitModal('addAttendance', data, '✅ Attendance marked!', 'my_attendance');
+    html+='<div style="display:flex;flex-direction:column;gap:6px">';
+    todayAtt.slice(0,8).forEach(function(a){
+      var col=a.Status==='Present'?'var(--G)':a.Status==='Late'?'var(--O)':'var(--R)';
+      html+='<div class="list-card" style="padding:10px 13px;cursor:default">'+
+        '<div class="lc-row"><span style="font-size:13px;font-weight:700;color:var(--tx)">'+_esc(_driverName(a.DriverID))+'</span>'+
+        '<span class="badge badge-'+String(a.Status||'').toLowerCase().replace(' ','-')+'">'+_esc(a.Status)+'</span></div>'+
+        '<div class="lc-meta"><i class="fas fa-car" style="color:'+col+'"></i>'+_esc(_vehicleNo(a.VehicleID))+
+        ' &nbsp;·&nbsp; IN: '+_esc(_fmtTime(a.InTime))+(a.OutTime?' &nbsp;·&nbsp; OUT: '+_esc(_fmtTime(a.OutTime)):'')+'</div></div>';
+    });
+    html+='</div>';
+    if(todayAtt.length>8)html+='<div style="font-size:12px;color:var(--P);cursor:pointer;margin-top:6px" onclick="_loadV(\'attendance\')">View all '+todayAtt.length+' records →</div>';
   }
+  html+='</div>';
+
+  // Announcements
+  html+='<div>';
+  html+='<div class="sec-hdr"><i class="fas fa-bullhorn" style="color:var(--P)"></i>Announcements</div>';
+  if(!anns.length){
+    html+='<div style="color:var(--tx3);font-size:13px;padding:16px 0">No announcements.</div>';
+  } else {
+    anns.slice(0,3).forEach(function(a){
+      var priority=String(a.priority||'Normal').toLowerCase();
+      html+='<div class="ann-card '+priority+'">' +
+        '<div class="ann-text">'+_esc(a.text)+'</div>' +
+        '<div class="ann-meta"><i class="fas fa-user"></i>'+_esc(a.posted_by_name)+'&nbsp;·&nbsp;<i class="fas fa-clock"></i>'+_fmtDate(a.posted_at)+'</div></div>';
+    });
+    if(anns.length>3)html+='<div style="font-size:12px;color:var(--P);cursor:pointer;margin-top:6px" onclick="_loadV(\'announcements\')">View all →</div>';
+  }
+  html+='</div>';
+
+  html+='</div>'; // end grid
+
+  // Recent fuel
+  var recentFuel=(fuel||[]).slice(-5).reverse();
+  if(recentFuel.length){
+    html+='<div class="sec-hdr"><i class="fas fa-gas-pump" style="color:var(--O)"></i>Recent Fuel Entries</div>';
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
+      '<th>Vehicle</th><th>Driver</th><th>Date</th><th>Qty</th><th>Amount</th><th>Mileage</th></tr></thead><tbody>';
+    recentFuel.forEach(function(f){
+      var mil=parseFloat(f.Mileage||0);
+      var milCol=mil>0&&mil<6?'color:var(--R);font-weight:800':mil>=12?'color:var(--G);font-weight:700':'';
+      html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(f.VehicleID))+'</span></td>'+
+        '<td>'+_esc(_driverName(f.DriverID))+'</td>'+
+        '<td>'+_fmtDate(f.Date)+'</td>'+
+        '<td>'+_esc(f.FuelQty)+'L</td>'+
+        '<td>'+_inr(f.Amount)+'</td>'+
+        '<td style="'+milCol+'">'+(mil>0?mil+' km/L':'—')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+
+  return html;
 }
 
-function submitInspection() {
-  var checks = {};
-  APP_CONFIG.INSPECTION_CHECKS.forEach(function(c){ checks[c.key] = window['_toggle_' + c.key] || 'No'; });
-  _submitForm('addInspection', Object.assign({ date: _v('ins-date')||_today(), vehicleID: _v('ins-vid'), remarks: _v('ins-remarks') }, checks), '✅ Inspection submitted!');
+function _kpi(icon,color,val,label,sub,extra){
+  return '<div class="kpi-card" style="--kc:'+color+'"'+(extra?' '+extra:'')+' '+(extra?'style="cursor:pointer"':'')+'>' +
+    '<div class="kpi-top"><div class="kpi-ico"><i class="fas '+icon+'"></i></div></div>' +
+    '<div class="kpi-val">'+_esc(String(val))+'</div>' +
+    '<div class="kpi-lbl">'+_esc(label)+'</div>' +
+    '<div class="kpi-sub">'+_esc(sub||'')+'</div></div>';
 }
 
-function submitCleaning() {
-  var checks = {};
-  APP_CONFIG.CLEANING_CHECKS.forEach(function(c){ checks[c.key] = window['_toggle_' + c.key] || 'No'; });
-  _submitForm('addCleaning', Object.assign({ date: _v('cln-date')||_today() }, checks), '✅ Cleaning saved!');
-}
+// ── OPERATIONS / CONTROL ROOM ─────────────────────────────────────────────────
+function _vOperations(){
+  var veh=_D.vehicles||[];var drv=_D.drivers||[];
+  var att=_D.attendance||[];var fuel=_D.fuel||[];
+  var dels=_D.delegations||[];var chk=_D.checklists||[];
+  var today=_today();
 
-function submitFuel() {
-  var data = { date: _v('fuel-date')||_today(), vehicleID: _v('fuel-vid'),
-    kmReading: parseFloat(_v('fuel-km'))||0, previousKM: parseFloat(_v('fuel-prevkm'))||0,
-    fuelQty: parseFloat(_v('fuel-qty'))||0, amount: parseFloat(_v('fuel-amt'))||0, pumpName: _v('fuel-pump') };
-  if (!data.vehicleID || !data.fuelQty || !data.amount) { _toast('Vehicle ID, Qty aur Amount zaroori hai.', 'danger'); return; }
-  if (data.kmReading && data.previousKM && data.kmReading < data.previousKM) { _toast('Current KM, previous KM se kam nahi ho sakta.', 'danger'); return; }
-  _submitForm('addFuel', data, '⛽ Fuel entry saved!');
-}
+  var todayAtt=att.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
+  var present=todayAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
+  var todayFuel=fuel.filter(function(f){return String(f.Date||'').slice(0,10)===today;}).length;
+  var overdueDels=dels.filter(function(d){return d.is_overdue;}).length;
+  var pendingChk=chk.filter(function(c){return String(c.Status||'')==='Pending';}).length;
 
-function submitTrip() {
-  var data = { date: _v('trp-date')||_today(), vehicleID: _v('trp-vid'),
-    fromLocation: _v('trp-from'), toLocation: _v('trp-to'), materialType: _v('trp-mat'),
-    weight: parseFloat(_v('trp-wt'))||0, startKM: parseFloat(_v('trp-skm'))||0,
-    endKM: parseFloat(_v('trp-ekm'))||0, remarks: _v('trp-rem') };
-  if (!data.vehicleID || !data.fromLocation || !data.toLocation) { _toast('Vehicle, From aur To location zaroori hain.', 'danger'); return; }
-  if (data.endKM && data.endKM < data.startKM) { _toast('End KM, Start KM se kam nahi ho sakta.', 'danger'); return; }
-  _submitForm('addTrip', data, '🗺️ Trip logged!');
-}
+  var html='<div class="control-hero">' +
+    '<div><span class="eyebrow">LIVE — '+_today()+'</span><h3>Fleet Control Room</h3>' +
+    '<p>'+present+' drivers present · '+todayFuel+' fuel entries · '+veh.filter(function(v){return v.Status==='Active';}).length+' vehicles active</p></div>' +
+    '<button class="control-cta" onclick="_loadV(\'dashboard\')"><i class="fas fa-chart-pie"></i> Full Dashboard</button></div>';
 
-function submitService() {
-  var data = { vehicleID: _v('svc-vid'), serviceType: _v('svc-type'), serviceDate: _v('svc-date')||_today(),
-    garageName: _v('svc-garage'), issue: _v('svc-issue'), amount: parseFloat(_v('svc-amt'))||0,
-    serviceKM: parseFloat(_v('svc-km'))||0, nextServiceDate: _v('svc-ndate'),
-    nextServiceKM: parseFloat(_v('svc-nkm'))||0, technicianName: _v('svc-tech'), status: 'Completed' };
-  _submitForm('addService', data, '🔧 Service logged!');
-}
+  html+='<div class="kpi-grid" style="margin-bottom:18px">';
+  html+=_kpi('fa-users','#27AE60',present,'Present Today','');
+  html+=_kpi('fa-list-check','#0D9488',pendingChk,'Pending Tasks','Checklist today');
+  html+=_kpi('fa-triangle-exclamation','#E74C3C',overdueDels,'Overdue Tasks','');
+  html+=_kpi('fa-gas-pump','#E67E22',todayFuel,'Fuel Entries','Today');
+  html+='</div>';
 
-function submitExpense() {
-  _submitForm('addExpense', { date: _v('exp-date')||_today(), vehicleID: _v('exp-vid'),
-    expenseType: _v('exp-type'), amount: parseFloat(_v('exp-amt'))||0,
-    paymentMode: _v('exp-mode'), remarks: _v('exp-rem') }, '💸 Expense saved!');
-}
+  html+='<div class="sec-hdr"><i class="fas fa-exclamation-circle" style="color:var(--O)"></i>Needs Attention</div>';
 
-function submitKMLog() {
-  var data = { date: _v('km-date')||_today(), vehicleID: _v('km-vid'),
-    odometer: parseFloat(_v('km-odo'))||0, remarks: _v('km-rem') };
-  if (!data.vehicleID || !data.odometer) { _toast('Vehicle aur odometer reading zaroori hai.', 'danger'); return; }
-  _submitForm('addKMLog', data, '📏 KM entry saved!');
-}
+  // Low fastag vehicles
+  var lowFT=veh.filter(function(v){return Number(v.FastagBalance||0)<300;});
+  if(lowFT.length){
+    lowFT.forEach(function(v){
+      html+='<button class="attention-card" onclick="openVehicleDetail(\''+v.VehicleID+'\')">' +
+        '<div class="attention-icon">🏷️</div>' +
+        '<div class="attention-copy"><b>'+_esc(v.VehicleNo)+' — Fastag Low</b><small>Balance: ₹'+Number(v.FastagBalance||0)+'</small></div>' +
+        '<div class="attention-count">₹'+Number(v.FastagBalance||0)+'</div></button>';
+    });
+  }
 
-function submitFastag() {
-  var open = parseFloat(_v('ft-open'))||0, rch = parseFloat(_v('ft-rch'))||0;
-  if (!rch) { _toast('Recharge amount daalo.', 'danger'); return; }
-  _submitForm('addFastag', { vehicleID: _v('ft-vid'), date: _v('ft-date')||_today(),
-    opening: open, recharge: rch, remarks: _v('ft-rem') }, '🏷️ Fastag recharged!');
-}
-
-function submitVehicle() {
-  _submitForm('addVehicle', { vehicleNo: _v('nv-no'), vehicleType: _v('nv-type'), fuelType: _v('nv-fuel'),
-    ownershipType: _v('nv-own'), brand: _v('nv-brand'), model: _v('nv-model'),
-    registrationNo: _v('nv-reg'), engineNo: _v('nv-eng'), chassisNo: _v('nv-chs'),
-    currentKM: parseFloat(_v('nv-km'))||0, insuranceExpiry: _v('nv-ins'),
-    pucExpiry: _v('nv-puc'), fastagNo: _v('nv-ft'), fastagBalance: parseFloat(_v('nv-ftbal'))||0,
-    assignedDriverID: _v('nv-drv') }, '🚗 Vehicle added!');
-}
-
-function submitDriver() {
-  var data = { name: _v('nd-name'), mobile: _v('nd-mob'), email: _v('nd-email'),
-    password: _v('nd-pass'), address: _v('nd-addr'), licenseNo: _v('nd-lic'),
-    licenseExpiry: _v('nd-licexp'), aadhaarNo: _v('nd-aadh'), bloodGroup: _v('nd-blood'),
-    emergencyContact: _v('nd-emg'), joiningDate: _v('nd-join')||_today(), salary: parseFloat(_v('nd-sal'))||0 };
-  if (!data.name || !data.mobile) { _toast('Name aur mobile zaroori hai.', 'danger'); return; }
-  _submitForm('addDriver', data, '👤 Driver added!');
-}
-
-function submitPenalty() {
-  var data = { driverID: _v('pnl-driver'), date: _v('pnl-date')||_today(),
-    reason: _v('pnl-reason'), amount: parseFloat(_v('pnl-amt'))||0 };
-  if (!data.driverID || !data.reason) { _toast('Driver ID aur reason zaroori hai.', 'danger'); return; }
-  _submitModal('addPenalty', data, '⚠️ Penalty added!', null);
-}
-
-function submitReward() {
-  var data = { driverID: _v('rwd-driver'), date: _v('rwd-date')||_today(),
-    reason: _v('rwd-reason'), amount: parseFloat(_v('rwd-amt'))||0 };
-  if (!data.driverID || !data.reason) { _toast('Driver ID aur reason zaroori hai.', 'danger'); return; }
-  _submitModal('addReward', data, '🏆 Reward added!', null);
-}
-
-// Core submit helpers
-function _submitForm(action, data, successMsg) {
-  var btn = document.querySelector('.btn-primary.full-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
-  _api(action, data,
-    function(r) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Submit'; }
-      if (!r.success) { _toast(r.error || 'Save fail', 'danger'); return; }
-      _toast(successMsg, 'success');
-      setTimeout(function(){ _refreshData(function(){ if (_VIEW) _showView(_VIEW); }); }, 800);
-    },
-    function(e) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Submit'; }
-      _toast(e.message || 'Error', 'danger');
+  // Expiry alerts
+  veh.forEach(function(v){
+    var insD=_daysLeft(String(v.InsuranceExpiry||'').slice(0,10));
+    if(insD>=0&&insD<=30){
+      html+='<button class="attention-card" onclick="openVehicleDetail(\''+v.VehicleID+'\')">' +
+        '<div class="attention-icon">🛡️</div>' +
+        '<div class="attention-copy"><b>'+_esc(v.VehicleNo)+' — Insurance Expiring</b><small>'+insD+' days remaining</small></div>' +
+        '<div class="attention-count" style="color:var(--R)">'+insD+'d</div></button>';
     }
-  );
+  });
+
+  // Overdue delegations
+  if(overdueDels){
+    html+='<button class="attention-card" onclick="_loadV(\'delegation\')">' +
+      '<div class="attention-icon">⚠️</div>' +
+      '<div class="attention-copy"><b>'+overdueDels+' Overdue Tasks</b><small>Delegations past due date</small></div>' +
+      '<div class="attention-count" style="color:var(--R)">'+overdueDels+'</div></button>';
+  }
+
+  if(!lowFT.length&&!overdueDels){
+    html+='<div style="padding:24px;text-align:center;color:var(--tx3);font-size:13px">✅ All clear — no urgent items</div>';
+  }
+
+  // Vehicle status grid
+  html+='<div class="sec-hdr"><i class="fas fa-car" style="color:var(--B)"></i>Live Vehicle Status</div>';
+  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">';
+  veh.filter(function(v){return v.Status==='Active';}).forEach(function(v){
+    var drv=_driverByID(v.AssignedDriverID);
+    var drvAtt=todayAtt.filter(function(a){return String(a.DriverID||'')===String(v.AssignedDriverID||'');});
+    var attStatus=drvAtt.length?drvAtt[drvAtt.length-1].Status:'Not marked';
+    var attCol=attStatus==='Present'?'var(--G)':attStatus==='Late'?'var(--O)':'var(--tx3)';
+    html+='<div class="list-card" style="cursor:pointer" onclick="openVehicleDetail(\''+v.VehicleID+'\')">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'+
+      '<span class="plate-tag">'+_esc(v.VehicleNo)+'</span>'+
+      '<span style="font-size:11px;color:var(--tx3)">'+_esc(v.VehicleType||'')+'</span></div>'+
+      '<div style="font-size:12px;color:var(--tx2);margin-bottom:4px"><i class="fas fa-id-badge"></i> '+_esc(drv?drv.Name:'Unassigned')+'</div>'+
+      '<div style="font-size:11.5px;color:'+attCol+'"><i class="fas fa-circle-dot"></i> '+_esc(attStatus)+'</div>'+
+      '<div style="font-size:11.5px;color:var(--tx3);margin-top:3px"><i class="fas fa-gauge-high"></i> '+Number(v.CurrentKM||0).toLocaleString('en-IN')+' km &nbsp;|&nbsp; Fastag: ₹'+Number(v.FastagBalance||0)+'</div></div>';
+  });
+  html+='</div>';
+
+  return html;
 }
 
-function _submitModal(action, data, successMsg, nextView) {
-  _api(action, data,
-    function(r) {
-      closeModal();
-      if (!r.success) { _toast(r.error || 'Fail', 'danger'); return; }
-      _toast(successMsg, 'success');
-      setTimeout(function(){ _refreshData(function(){ if (nextView) _showView(nextView); else if (_VIEW) _showView(_VIEW); }); }, 800);
-    },
-    function(e) { closeModal(); _toast(e.message || 'Error', 'danger'); }
-  );
+// ── VEHICLES ──────────────────────────────────────────────────────────────────
+function _vVehicles(){
+  var veh=_D.vehicles||[];
+  var html=_ph('Vehicles','<button class="btn btn-sm" onclick="openAddVehicle()"><i class="fas fa-plus"></i> Add Vehicle</button>');
+  html+='<div class="search-bar"><i class="fas fa-search"></i><input id="veh-search" placeholder="Search by number, brand, type..." oninput="_filterVeh()" ></div>';
+  if(!veh.length)return html+_emptyState('🚗','No vehicles yet','Add your first vehicle');
+  html+='<div id="veh-list">'+_renderVehList(veh)+'</div>';
+  return html;
+}
+function _filterVeh(){
+  var q=(document.getElementById('veh-search').value||'').toLowerCase();
+  var veh=(_D.vehicles||[]).filter(function(v){
+    return !q||(v.VehicleNo||'').toLowerCase().includes(q)||(v.Brand||'').toLowerCase().includes(q)||
+      (v.Model||'').toLowerCase().includes(q)||(v.VehicleType||'').toLowerCase().includes(q);
+  });
+  var el=document.getElementById('veh-list');if(el)el.innerHTML=_renderVehList(veh);
+}
+function _renderVehList(veh){
+  if(!veh.length)return _emptyState('🔍','No results','Try a different search');
+  return veh.map(function(v){
+    var insD=_daysLeft(String(v.InsuranceExpiry||'').slice(0,10));
+    var pucD=_daysLeft(String(v.PUCExpiry||'').slice(0,10));
+    var ftB=Number(v.FastagBalance||0);
+    var health=insD<7||pucD<7?'danger':insD<30||pucD<15||ftB<300?'warn':'ok';
+    var hCol=health==='ok'?'var(--G)':health==='warn'?'var(--O)':'var(--R)';
+    var hLabel=health==='ok'?'Healthy':health==='warn'?'Needs Attention':'Action Required';
+    var drv=_driverByID(v.AssignedDriverID);
+    return '<div class="veh-card" onclick="openVehicleDetail(\''+v.VehicleID+'\')">'+
+      '<div class="vc-header">'+
+      '<div><div class="vc-plate">'+_esc(v.VehicleNo)+'</div>'+
+      '<div class="vc-brand">'+_esc((v.Brand||'')+' '+( v.Model||''))+'  <span class="pill">'+_esc(v.VehicleType||'')+'</span></div></div>'+
+      '<div class="vc-health" style="background:'+hCol+'22;color:'+hCol+'"><div class="vc-dot" style="background:'+hCol+'"></div>'+hLabel+'</div></div>'+
+      '<div class="vc-pills">'+
+      '<span class="pill">'+_esc(v.FuelType||'')+'</span>'+
+      '<span class="pill">'+_esc(v.OwnershipType||'')+'</span>'+
+      (drv?'<span class="pill"><i class="fas fa-id-badge"></i> '+_esc(drv.Name)+'</span>':'')+
+      '</div>'+
+      '<div class="vc-stats">'+
+      '<div class="vc-stat"><div class="vs-val">'+Number(v.CurrentKM||0).toLocaleString('en-IN')+'</div><div class="vs-lbl">Curr KM</div></div>'+
+      '<div class="vc-stat"><div class="vs-val" style="color:'+(insD<30?'var(--R)':'var(--tx)')+'">'+insD+'d</div><div class="vs-lbl">Insurance</div></div>'+
+      '<div class="vc-stat"><div class="vs-val" style="color:'+(pucD<15?'var(--R)':'var(--tx)')+'">'+pucD+'d</div><div class="vs-lbl">PUC</div></div>'+
+      '<div class="vc-stat"><div class="vs-val" style="color:'+(ftB<300?'var(--R)':'var(--tx)')+'">₹'+ftB+'</div><div class="vs-lbl">Fastag</div></div>'+
+      '</div></div>';
+  }).join('');
 }
 
-// Toggle helper
-function setToggle(key, val, btn) {
-  window['_toggle_' + key] = val;
-  var group = document.getElementById('tg-' + key);
-  if (!group) return;
-  group.querySelectorAll('button').forEach(function(b){ b.classList.remove('active'); });
-  btn.classList.add('active');
+// Vehicle detail
+function openVehicleDetail(vID){
+  var v=_vehicleByID(vID);if(!v)return;
+  var drv=_driverByID(v.AssignedDriverID);
+  var insD=_daysLeft(String(v.InsuranceExpiry||'').slice(0,10));
+  var pucD=_daysLeft(String(v.PUCExpiry||'').slice(0,10));
+  var ftB=Number(v.FastagBalance||0);
+  var fuelRec=(_D.fuel||[]).filter(function(f){return String(f.VehicleID||'')===vID;});
+  var lastFuel=fuelRec[fuelRec.length-1]||null;
+
+  var body='<div class="vd-hero"><div class="vd-plate">'+_esc(v.VehicleNo)+'</div>'+
+    '<div class="vd-name">'+_esc((v.Brand||'')+' '+(v.Model||''))+'</div>'+
+    '<div class="vd-pills"><span class="vd-pill">'+_esc(v.FuelType||'')+'</span><span class="vd-pill">'+_esc(v.OwnershipType||'')+'</span><span class="vd-pill">'+_esc(v.VehicleType||'')+'</span></div></div>';
+
+  body+='<div class="vd-stats">'+
+    '<div class="vd-stat"><div class="vds-val">'+Number(v.CurrentKM||0).toLocaleString('en-IN')+'</div><div class="vds-lbl">Current KM</div></div>'+
+    '<div class="vd-stat"><div class="vds-val">₹'+ftB+'</div><div class="vds-lbl">Fastag Bal</div></div>'+
+    '<div class="vd-stat"><div class="vds-val">'+(lastFuel?lastFuel.Mileage+'kmpl':'—')+'</div><div class="vds-lbl">Last Mileage</div></div></div>';
+
+  body+='<div class="doc-status-grid">'+
+    '<div class="dsc" style="--kc:'+(insD<7?'var(--R)':insD<30?'var(--O)':'var(--G)')+'">'+
+    '<div class="dsc-icon">🛡️</div><div class="dsc-label">Insurance</div><div class="dsc-val">'+_fmtDate(v.InsuranceExpiry)+'</div><div class="dsc-days">'+insD+'d left</div></div>'+
+    '<div class="dsc" style="--kc:'+(pucD<7?'var(--R)':pucD<15?'var(--O)':'var(--G)')+'">'+
+    '<div class="dsc-icon">🌿</div><div class="dsc-label">PUC</div><div class="dsc-val">'+_fmtDate(v.PUCExpiry)+'</div><div class="dsc-days">'+pucD+'d left</div></div>'+
+    '<div class="dsc" style="--kc:'+(ftB<300?'var(--R)':ftB<1000?'var(--O)':'var(--G)')+'">'+
+    '<div class="dsc-icon">🏷️</div><div class="dsc-label">Fastag</div><div class="dsc-val">₹'+ftB+'</div><div class="dsc-days">'+(ftB<300?'Recharge needed!':'OK')+'</div></div></div>';
+
+  if(drv){
+    body+='<div class="sec-hdr">Assigned Driver</div>'+
+      '<div class="list-card" style="cursor:default">'+
+      '<div style="display:flex;align-items:center;gap:12px">'+
+      '<div style="width:40px;height:40px;border-radius:50%;background:'+_avatarColor(drv.Name)+';display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800">'+_initials(drv.Name)+'</div>'+
+      '<div><div style="font-size:14px;font-weight:800">'+_esc(drv.Name)+'</div>'+
+      '<div style="font-size:12px;color:var(--tx3)">'+_esc(drv.Mobile)+' &nbsp;·&nbsp; '+_esc(drv.BloodGroup||'')+'</div></div></div></div>';
+  }
+
+  body+='<div class="action-btns">'+
+    '<button class="btn-action" onclick="closeModal();_loadV(\'fuel\')"><i class="fas fa-gas-pump"></i> Fuel</button>'+
+    '<button class="btn-action" onclick="closeModal();_loadV(\'services\')"><i class="fas fa-wrench"></i> Service</button>'+
+    '<button class="btn-action" onclick="closeModal();_loadV(\'documents\')"><i class="fas fa-file"></i> Docs</button>'+
+    '<button class="btn-action" onclick="closeModal();_loadV(\'fastag\')"><i class="fas fa-tag"></i> Fastag</button>'+
+    '</div>';
+
+  _modal('Vehicle — '+v.VehicleNo, body);
 }
 
-// Shortcuts
-function openInsForm()  { _showView('my_inspection'); }
-function openClnForm()  { _showView('my_cleaning'); }
-function openFuelForm() { _showView(_U.role === 'driver' ? 'my_fuel' : 'my_fuel'); }
-function openTripForm() { _showView(_U.role === 'driver' ? 'my_trips' : 'my_trips'); }
-function openKMForm()   { _showView(_U.role === 'driver' ? 'my_kmlogs' : 'my_kmlogs'); }
-
-// ═══════════════════════════════════════════════════════════════
-// UI BUILDER HELPERS
-// ═══════════════════════════════════════════════════════════════
-
-function _pageHeader(title, actions) {
-  return '<div class="page-header"><h2 class="page-title">' + title + '</h2>' +
-    (actions ? '<div class="page-actions">' + actions + '</div>' : '') + '</div>';
+function openAddVehicle(){
+  var opts=function(arr){return arr.map(function(a){return'<option>'+a+'</option>';}).join('');};
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Vehicle Number *</label><input id="nv-no" placeholder="e.g. UP36B5958" style="text-transform:uppercase"></div>'+
+    '<div class="fgrp"><label>Vehicle Type *</label><select id="nv-type"><option value="">Select</option>'+opts(APP_CONFIG.VEHICLE_TYPES)+'</select></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Brand</label><input id="nv-brand" placeholder="e.g. Maruti"></div>'+
+    '<div class="fgrp"><label>Model</label><input id="nv-model" placeholder="e.g. Swift"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Fuel Type</label><select id="nv-fuel"><option value="">Select</option>'+opts(APP_CONFIG.FUEL_TYPES)+'</select></div>'+
+    '<div class="fgrp"><label>Ownership</label><select id="nv-own"><option value="">Select</option>'+opts(APP_CONFIG.OWNERSHIP_TYPES)+'</select></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Insurance Expiry</label><input type="date" id="nv-ins"></div>'+
+    '<div class="fgrp"><label>PUC Expiry</label><input type="date" id="nv-puc"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Fastag No</label><input id="nv-ftno" placeholder="Fastag number"></div>'+
+    '<div class="fgrp"><label>Fastag Balance (₹)</label><input type="number" id="nv-ftbal" placeholder="0"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Registration No</label><input id="nv-reg" placeholder="MH19B3547"></div>'+
+    '<div class="fgrp"><label>Current KM</label><input type="number" id="nv-km" placeholder="0"></div></div>'+
+    '<div class="fgrp"><label>Assign Driver</label><select id="nv-drv"><option value="">— Unassigned —</option>'+
+    (_D.drivers||[]).filter(function(d){return d.Status==='Active';}).map(function(d){return'<option value="'+d.DriverID+'">'+_esc(d.Name)+'</option>';}).join('')+'</select></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddVehicle()"><i class="fas fa-plus"></i> Add Vehicle</button></div>';
+  _modal('Add New Vehicle',body);
 }
 
-function _sectionHeader(text) {
-  return '<div class="section-header">' + text + '</div>';
+function submitAddVehicle(){
+  var no=document.getElementById('nv-no').value.trim().toUpperCase();
+  var type=document.getElementById('nv-type').value;
+  if(!no||!type){_toast('Vehicle number aur type zaroori hain','warn');return;}
+  var data={
+    vehicleNo:no,vehicleType:type,
+    brand:document.getElementById('nv-brand').value.trim(),
+    model:document.getElementById('nv-model').value.trim(),
+    fuelType:document.getElementById('nv-fuel').value,
+    ownershipType:document.getElementById('nv-own').value,
+    insuranceExpiry:document.getElementById('nv-ins').value,
+    pucExpiry:document.getElementById('nv-puc').value,
+    fastagNo:document.getElementById('nv-ftno').value.trim(),
+    fastagBalance:document.getElementById('nv-ftbal').value||0,
+    registrationNo:document.getElementById('nv-reg').value.trim(),
+    currentKM:document.getElementById('nv-km').value||0,
+    assignedDriverID:document.getElementById('nv-drv').value
+  };
+  closeModal();_showLoader('Adding vehicle...');
+  _gas('addVehicle',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('Vehicle added! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
 }
 
-function _searchBar(id, ph, fn) {
-  return '<div class="search-bar"><span class="sb-icon">🔍</span>' +
-    '<input id="' + id + '" class="sb-input" placeholder="' + ph + '" oninput="' + fn + '"></div>';
+// ── DRIVERS ───────────────────────────────────────────────────────────────────
+function _vDrivers(){
+  var drv=_D.drivers||[];
+  var html=_ph('Drivers','<button class="btn btn-sm" onclick="openAddDriver()"><i class="fas fa-plus"></i> Add Driver</button>');
+  html+='<div class="search-bar"><i class="fas fa-search"></i><input id="drv-search" placeholder="Search by name, mobile, license..." oninput="_filterDrv()"></div>';
+  if(!drv.length)return html+_emptyState('👤','No drivers yet','Add your first driver');
+  html+='<div id="drv-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">'+_renderDrvGrid(drv)+'</div>';
+  return html;
+}
+function _filterDrv(){
+  var q=(document.getElementById('drv-search').value||'').toLowerCase();
+  var drv=(_D.drivers||[]).filter(function(d){
+    return !q||(d.Name||'').toLowerCase().includes(q)||(d.Mobile||'').includes(q)||(d.LicenseNo||'').toLowerCase().includes(q);
+  });
+  var el=document.getElementById('drv-grid');if(el)el.innerHTML=_renderDrvGrid(drv);
+}
+function _renderDrvGrid(drv){
+  if(!drv.length)return _emptyState('🔍','No results','Try a different search');
+  return drv.map(function(d){
+    var col=_avatarColor(d.Name);
+    var licD=_daysLeft(String(d.LicenseExpiry||'').slice(0,10));
+    var veh=_vehicles().filter(function(v){return String(v.AssignedDriverID||'')===String(d.DriverID||'');});
+    return '<div class="driver-card" onclick="openDriverDetail(\''+d.DriverID+'\')">'+
+      '<div class="dc-top" style="background:linear-gradient(135deg,'+col+'22,var(--sur2))"></div>'+
+      '<div style="position:absolute;top:28px;left:14px;width:48px;height:48px;border-radius:12px;border:3px solid var(--sur);'+
+      'background:'+col+';display:flex;align-items:center;justify-content:center;font-weight:900;font-size:17px;color:#fff;box-shadow:0 2px 10px rgba(0,0,0,.15)">'+_initials(d.Name)+'</div>'+
+      '<div class="dc-body">'+
+      '<div class="dc-name">'+_esc(d.Name)+'</div>'+
+      '<div class="dc-meta"><i class="fas fa-phone"></i> '+_esc(d.Mobile)+'</div>'+
+      '<div class="dc-meta" style="margin-top:4px"><i class="fas fa-id-card"></i> '+_esc(d.LicenseNo||'—')+'</div>'+
+      '<div class="dc-foot">'+
+      '<span class="badge '+(d.Status==='Active'?'badge-active':'badge-inactive')+'">'+_esc(d.Status)+'</span>'+
+      (veh.length?'<span class="pill"><i class="fas fa-car"></i> '+_esc(veh[0].VehicleNo)+'</span>':'')+
+      (licD<30&&licD>=0?'<span class="badge badge-warning">Lic: '+licD+'d</span>':'')+
+      '</div></div></div>';
+  }).join('');
+}
+function openDriverDetail(dID){
+  var d=_driverByID(dID);if(!d)return;
+  var veh=_vehicles().filter(function(v){return String(v.AssignedDriverID||'')===dID;});
+  var licD=_daysLeft(String(d.LicenseExpiry||'').slice(0,10));
+  var col=_avatarColor(d.Name);
+
+  var body='<div style="display:flex;align-items:center;gap:14px;padding:4px 0 16px">'+
+    '<div style="width:56px;height:56px;border-radius:14px;background:'+col+';display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;color:#fff;flex-shrink:0">'+_initials(d.Name)+'</div>'+
+    '<div><div style="font-size:17px;font-weight:900">'+_esc(d.Name)+'</div>'+
+    '<div style="font-size:12px;color:var(--tx3)">'+_esc(d.Mobile)+' &nbsp;·&nbsp; '+_esc(d.BloodGroup||'—')+'</div>'+
+    '<div style="margin-top:4px"><span class="badge '+(d.Status==='Active'?'badge-active':'badge-inactive')+'">'+_esc(d.Status)+'</span></div></div></div>';
+
+  body+='<div class="detail-grid">'+
+    _dr('License',d.LicenseNo)+_dr('License Expiry',_fmtDate(d.LicenseExpiry)+(licD<30&&licD>=0?' <span style="color:var(--R);font-weight:800">('+licD+'d)</span>':''))+
+    _dr('Joining Date',_fmtDate(d.JoiningDate))+_dr('Address',d.Address||'—')+
+    _dr('Emergency',d.EmergencyContact||'—')+_dr('Salary','₹'+Number(d.Salary||0).toLocaleString('en-IN'))+
+    _dr('Week Off',d.WeekOffDay||'Sunday')+_dr('Aadhaar',d.AadhaarNo||'—')+'</div>';
+
+  if(veh.length){
+    body+='<div class="sec-hdr">Assigned Vehicle</div>'+
+      '<div class="list-card" style="cursor:default">'+
+      '<div class="lc-row"><span class="plate-tag">'+_esc(veh[0].VehicleNo)+'</span>'+
+      '<span class="badge badge-active">Active</span></div>'+
+      '<div class="lc-sub">'+_esc(veh[0].Brand||'')+' '+_esc(veh[0].Model||'')+' · '+_esc(veh[0].FuelType||'')+'</div></div>';
+  }
+
+  body+='<div class="action-btns">'+
+    '<button class="btn-action" onclick="closeModal();_openAddPenalty(\''+dID+'\')"><i class="fas fa-triangle-exclamation"></i> Penalty</button>'+
+    '<button class="btn-action" onclick="closeModal();_openAddReward(\''+dID+'\')"><i class="fas fa-trophy"></i> Reward</button>'+
+    '<button class="btn-action" onclick="closeModal();_openAddLeaveApproval(\''+dID+'\')"><i class="fas fa-calendar"></i> Leave</button>'+
+    '</div>';
+
+  _modal('Driver — '+d.Name, body);
+}
+function _dr(label,val){
+  return '<div class="dr-row"><div class="dr-label">'+_esc(label)+'</div><div class="dr-val">'+val+'</div></div>';
+}
+function openAddDriver(){
+  var opts=function(arr){return arr.map(function(a){return'<option>'+a+'</option>';}).join('');};
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Full Name *</label><input id="nd-name" placeholder="Driver full name"></div>'+
+    '<div class="fgrp"><label>Mobile *</label><input id="nd-mob" placeholder="9XXXXXXXXX" type="tel"></div></div>'+
+    '<div class="fgrp"><label>Address</label><input id="nd-addr" placeholder="Full address"></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>License Number *</label><input id="nd-lic" placeholder="UP1234567890"></div>'+
+    '<div class="fgrp"><label>License Expiry</label><input type="date" id="nd-licexp"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Blood Group</label><select id="nd-blood"><option value="">Select</option>'+opts(APP_CONFIG.BLOOD_GROUPS)+'</select></div>'+
+    '<div class="fgrp"><label>Week Off</label><select id="nd-wkoff">'+opts(APP_CONFIG.WEEK_DAYS)+'</select></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Joining Date</label><input type="date" id="nd-join" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Birth Date</label><input type="date" id="nd-dob"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Aadhaar No</label><input id="nd-aadh" placeholder="12-digit Aadhaar"></div>'+
+    '<div class="fgrp"><label>Emergency Contact</label><input id="nd-emer" placeholder="9XXXXXXXXX" type="tel"></div></div>'+
+    '<div class="fgrp"><label>Salary (₹)</label><input type="number" id="nd-sal" placeholder="Monthly salary"></div>'+
+    '<div class="sec-hdr">App Login (Optional)</div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Email</label><input type="email" id="nd-email" placeholder="driver@ishasteels.com"></div>'+
+    '<div class="fgrp"><label>Password</label><input id="nd-pw" placeholder="Login password" type="password"></div></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddDriver()"><i class="fas fa-plus"></i> Add Driver</button></div>';
+  _modal('Add New Driver',body);
+}
+function submitAddDriver(){
+  var name=document.getElementById('nd-name').value.trim();
+  var mob=document.getElementById('nd-mob').value.trim();
+  var lic=document.getElementById('nd-lic').value.trim();
+  if(!name||!mob){_toast('Name aur mobile zaroori hain','warn');return;}
+  var data={
+    name:name,mobile:mob,licenseNo:lic,
+    address:document.getElementById('nd-addr').value.trim(),
+    licenseExpiry:document.getElementById('nd-licexp').value,
+    bloodGroup:document.getElementById('nd-blood').value,
+    weekOffDay:document.getElementById('nd-wkoff').value,
+    joiningDate:document.getElementById('nd-join').value,
+    birthDate:document.getElementById('nd-dob').value,
+    aadhaarNo:document.getElementById('nd-aadh').value.trim(),
+    emergencyContact:document.getElementById('nd-emer').value.trim(),
+    salary:document.getElementById('nd-sal').value||0,
+    email:document.getElementById('nd-email').value.trim(),
+    password:document.getElementById('nd-pw').value
+  };
+  closeModal();_showLoader('Adding driver...');
+  _gas('addDriver',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('Driver added! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
 }
 
-function _badge(status) {
-  if (!status) return '';
-  var s   = String(status).toLowerCase().replace(/ /g, '-');
-  return '<span class="badge badge-' + s + '">' + status + '</span>';
+// ── ATTENDANCE (Admin/Manager) ─────────────────────────────────────────────
+function _vAttendance(){
+  var att=_D.attendance||[];
+  var today=_today();
+  var todayAtt=att.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
+  var present=todayAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
+  var late=todayAtt.filter(function(a){return a.Status==='Late';}).length;
+  var absent=todayAtt.filter(function(a){return a.Status==='Absent';}).length;
+
+  var html=_ph('Attendance',
+    '<button class="btn btn-sm btn-ghost" onclick="_downloadAttCSV()"><i class="fas fa-download"></i> CSV</button>'+
+    '<button class="btn btn-sm" onclick="_loadV(\'muster\')"><i class="fas fa-table-list"></i> Muster</button>');
+
+  html+='<div class="att-summary">'+
+    '<div class="as-item as-present"><div class="as-num">'+present+'</div><div class="as-lbl">Present</div></div>'+
+    '<div class="as-item as-late"><div class="as-num">'+late+'</div><div class="as-lbl">Late</div></div>'+
+    '<div class="as-item as-absent"><div class="as-num">'+absent+'</div><div class="as-lbl">Absent</div></div>'+
+    '<div class="as-item as-total"><div class="as-num">'+todayAtt.length+'</div><div class="as-lbl">Total</div></div></div>';
+
+  html+='<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">'+
+    '<select id="att-filter-date" onchange="_filterAtt()" style="padding:8px 12px;border:1.5px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--sur);color:var(--tx);font-family:inherit">'+
+    '<option value="">Today</option><option value="week">This Week</option><option value="month">This Month</option></select>'+
+    '<div class="search-bar" style="flex:1;margin-bottom:0"><i class="fas fa-search"></i><input id="att-search" placeholder="Search driver..." oninput="_filterAtt()"></div></div>';
+
+  html+='<div id="att-list">'+_renderAttList(todayAtt)+'</div>';
+  return html;
+}
+function _filterAtt(){
+  var q=(document.getElementById('att-search').value||'').toLowerCase();
+  var range=(document.getElementById('att-filter-date').value)||'';
+  var today=_today();
+  var att=(_D.attendance||[]).filter(function(a){
+    var d=String(a.Date||'').slice(0,10);
+    if(range==='week'){var w=new Date();w.setDate(w.getDate()-7);if(d<w.toISOString().slice(0,10))return false;}
+    else if(range==='month'){if(!d.startsWith(today.slice(0,7)))return false;}
+    else{if(d!==today)return false;}
+    if(q){var name=_driverName(a.DriverID).toLowerCase();if(!name.includes(q))return false;}
+    return true;
+  });
+  var el=document.getElementById('att-list');if(el)el.innerHTML=_renderAttList(att);
+}
+function _renderAttList(att){
+  if(!att.length)return _emptyState('📋','No records','No attendance records for this period');
+  return '<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
+    '<th>Driver</th><th>Date</th><th>IN</th><th>OUT</th><th>Hours</th><th>Status</th><th>GPS</th></tr></thead><tbody>'+
+    att.slice().reverse().map(function(a){
+      var sCol=a.Status==='Present'?'badge-present':a.Status==='Late'?'badge-late':a.Status==='Half Day'?'badge-hd':'badge-absent';
+      return '<tr><td><b>'+_esc(_driverName(a.DriverID))+'</b></td>'+
+        '<td>'+_fmtDate(a.Date)+'</td>'+
+        '<td>'+_esc(_fmtTime(a.InTime)||'—')+'</td>'+
+        '<td>'+_esc(_fmtTime(a.OutTime)||'—')+'</td>'+
+        '<td>'+_esc(a.TotalHours||'—')+'</td>'+
+        '<td><span class="badge '+sCol+'">'+_esc(a.Status)+'</span></td>'+
+        '<td style="font-size:11px;color:var(--tx3)">'+_esc(a.GPSLocation?'📍 Yes':'—')+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+function _downloadAttCSV(){
+  var att=_D.attendance||[];
+  var rows=[['Driver','Date','IN','OUT','Hours','Status','GPS','Location']];
+  att.forEach(function(a){rows.push([_driverName(a.DriverID),a.Date,_fmtTime(a.InTime),_fmtTime(a.OutTime),a.TotalHours||'',a.Status,a.GPSLocation||'',a.Location||'']);});
+  _downloadCSV('ISE_Attendance_'+_today()+'.csv',rows);
 }
 
-function _heroStat(icon, val, label, color) {
-  return '<div class="hs-item" style="border-top-color:' + (color||'var(--color-primary)') + '">' +
-    '<div class="hs-icon">' + icon + '</div>' +
-    '<div class="hs-val" style="color:' + (color||'var(--color-primary)') + '">' + val + '</div>' +
-    '<div class="hs-label">' + label + '</div>' +
-  '</div>';
+// ── MUSTER GRID ───────────────────────────────────────────────────────────────
+function _vMuster(){
+  var html=_ph('Muster Report',
+    '<select id="muster-month" onchange="_loadMuster()" style="padding:8px 12px;border:1.5px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--sur);color:var(--tx);font-family:inherit">'+
+    _last6Months().map(function(m){return'<option value="'+m.val+'"'+(m.val===_today().slice(0,7)?' selected':'')+'>'+m.label+'</option>';}).join('')+'</select>'+
+    '<button class="btn btn-sm btn-ghost" onclick="_downloadMusterCSV()"><i class="fas fa-download"></i> CSV</button>');
+  html+='<div id="muster-grid">'+_renderMuster()+'</div>';
+  return html;
+}
+function _last6Months(){
+  var res=[];var d=new Date();
+  for(var i=0;i<6;i++){
+    var y=d.getFullYear(),m=d.getMonth();
+    res.push({val:y+'-'+(m<9?'0':'')+(m+1),label:['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m]+' '+y});
+    d.setMonth(d.getMonth()-1);
+  }
+  return res;
+}
+function _loadMuster(){
+  var m=document.getElementById('muster-month').value;
+  _showLoader('Loading muster...');
+  _gas('getMusterGrid',[m],function(res){
+    _hideLoader();
+    var el=document.getElementById('muster-grid');
+    if(el)el.innerHTML=_renderMusterFromData(res);
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _renderMuster(){
+  var att=_D.attendance||[];
+  var drv=_D.drivers||[];
+  var today=_today();var mon=today.slice(0,7);
+  var year=parseInt(mon.slice(0,4)),m=parseInt(mon.slice(5,7))-1;
+  var days=new Date(year,m+1,0).getDate();
+  var dates=[];for(var d=1;d<=days;d++)dates.push(mon+'-'+(d<10?'0':'')+d);
+
+  if(!drv.length)return _emptyState('📊','No drivers','Add drivers first');
+  var html='<div class="muster-wrap"><table class="muster-tbl"><thead><tr>'+
+    '<th class="mst-name">Driver</th><th class="mst-pct">%</th>'+
+    dates.map(function(dt){var dow=new Date(dt+'T00:00:00').getDay();return'<th class="mst-day">'+(dow===0||dow===6?'<b>':'')+dt.slice(8)+(dow===0||dow===6?'</b>':'')+'</th>';}).join('')+'</tr></thead><tbody>';
+
+  drv.filter(function(d){return d.Status==='Active';}).forEach(function(dr){
+    var dID=String(dr.DriverID||'');
+    var drvAtt={};
+    att.filter(function(a){return String(a.DriverID||'')===dID&&String(a.Date||'').startsWith(mon);})
+      .forEach(function(a){drvAtt[String(a.Date||'').slice(0,10)]=a.Status;});
+    var wod=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].indexOf(dr.WeekOffDay||'Sunday');
+    var p=0,total=0;
+    var cells=dates.map(function(dt){
+      var dow=new Date(dt+'T00:00:00').getDay();
+      if(dow===wod)return'<td class="mst-cell mst-WO">WO</td>';
+      total++;
+      var st=drvAtt[dt];
+      if(!st)return dt<=today?'<td class="mst-cell mst-A">A</td>':'<td class="mst-cell"></td>';
+      var cls=st==='Present'?'mst-P':st==='Late'?'mst-L':st==='Half Day'?'mst-HD':'mst-A';
+      var abbr=st==='Present'?'P':st==='Late'?'L':st==='Half Day'?'HD':'A';
+      if(st==='Present')p++;else if(st==='Late')p+=0.75;else if(st==='Half Day')p+=0.5;
+      return'<td class="mst-cell '+cls+'">'+abbr+'</td>';
+    });
+    var pct=total>0?Math.round(p/total*100):0;
+    html+='<tr><td class="mst-name"><b>'+_esc(dr.Name)+'</b></td>'+
+      '<td class="mst-pct" style="color:'+(pct>=90?'var(--G)':pct>=70?'var(--O)':'var(--R)')+'">'+pct+'%</td>'+
+      cells.join('')+'</tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+function _renderMusterFromData(res){
+  if(!res||!res.rows)return _emptyState('📊','No data','No muster data');
+  var dates=res.dates||[];var rows=res.rows||[];
+  var html='<div class="muster-wrap"><table class="muster-tbl"><thead><tr>'+
+    '<th class="mst-name">Driver</th><th class="mst-pct">%</th>'+
+    dates.map(function(dt){return'<th class="mst-day">'+dt.slice(8)+'</th>';}).join('')+'</tr></thead><tbody>';
+  rows.forEach(function(r){
+    html+='<tr><td class="mst-name"><b>'+_esc(r.name)+'</b></td>'+
+      '<td class="mst-pct" style="color:'+(r.pct>=90?'var(--G)':r.pct>=70?'var(--O)':'var(--R)')+'">'+r.pct+'%</td>'+
+      (r.cells||[]).map(function(c){
+        var cls=c==='P'?'mst-P':c==='L'?'mst-L':c==='HD'?'mst-HD':c==='A'?'mst-A':c==='WO'?'mst-WO':c==='H'?'mst-H':'';
+        return'<td class="mst-cell '+cls+'">'+c+'</td>';
+      }).join('')+'</tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+function _downloadMusterCSV(){
+  _toast('Downloading...','info');
+  _gas('getMusterGrid',[document.getElementById('muster-month').value],function(res){
+    if(!res||!res.rows)return;
+    var rows=[['Driver','%'].concat(res.dates||[])];
+    (res.rows||[]).forEach(function(r){rows.push([r.name,r.pct+'%'].concat(r.cells||[]));});
+    _downloadCSV('ISE_Muster_'+(res.month||_today().slice(0,7))+'.csv',rows);
+  },function(e){_toast(e.message,'err');});
 }
 
-function _bigAction(icon, label, fn, color) {
-  return '<button class="ba-btn" onclick="' + fn + '" style="border-top-color:' + (color||'var(--color-primary)') + '">' +
-    '<div class="ba-icon" style="color:' + (color||'var(--color-primary)') + '">' + icon + '</div>' +
-    '<div class="ba-label">' + label + '</div>' +
-  '</button>';
+// ── FUEL ─────────────────────────────────────────────────────────────────────
+function _vFuel(){
+  var fuel=_D.fuel||[];
+  var html=_ph('Fuel Entries',
+    '<button class="btn btn-sm btn-ghost" onclick="_downloadFuelCSV()"><i class="fas fa-download"></i> CSV</button>'+
+    '<button class="btn btn-sm" onclick="openAddFuel()"><i class="fas fa-plus"></i> Add Entry</button>');
+
+  var mon=_today().slice(0,7);
+  var monFuel=fuel.filter(function(f){return String(f.Date||'').startsWith(mon);});
+  var totAmt=monFuel.reduce(function(s,f){return s+Number(f.Amount||0);},0);
+  var totQty=monFuel.reduce(function(s,f){return s+Number(f.FuelQty||0);},0);
+  var avgMil=monFuel.filter(function(f){return parseFloat(f.Mileage||0)>0;});
+  var avgM=avgMil.length?( avgMil.reduce(function(s,f){return s+parseFloat(f.Mileage||0);},0)/avgMil.length).toFixed(1):0;
+
+  html+='<div class="finance-strip">'+
+    '<div class="fs-item"><div class="fs-label">Month Spend</div><div class="fs-val">'+_inr(totAmt)+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Total Qty</div><div class="fs-val">'+totQty.toFixed(1)+'L</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Avg Mileage</div><div class="fs-val">'+avgM+' km/L</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Entries</div><div class="fs-val">'+monFuel.length+'</div></div></div>';
+
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
+    '<th>Vehicle</th><th>Driver</th><th>Date</th><th>Qty</th><th>Amount</th><th>Rate</th><th>Mileage</th><th>Pump</th></tr></thead><tbody>';
+  fuel.slice().reverse().slice(0,50).forEach(function(f){
+    var mil=parseFloat(f.Mileage||0);
+    var mCol=mil>0&&mil<6?'color:var(--R);font-weight:800':mil>=12?'color:var(--G)':'';
+    html+='<tr>'+
+      '<td><span class="plate-tag">'+_esc(_vehicleNo(f.VehicleID))+'</span></td>'+
+      '<td>'+_esc(_driverName(f.DriverID))+'</td>'+
+      '<td>'+_fmtDate(f.Date)+'</td>'+
+      '<td>'+_esc(f.FuelQty)+'L</td>'+
+      '<td><b>'+_inr(f.Amount)+'</b></td>'+
+      '<td>₹'+_esc(f.CostPerLiter)+'/L</td>'+
+      '<td style="'+mCol+'">'+(mil>0?mil+' km/L':'—')+'</td>'+
+      '<td style="font-size:12px;color:var(--tx3)">'+_esc(f.PumpName||'—')+'</td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+function openAddFuel(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="af-veh" onchange="_fuelVehChange()"><option value="">Select Vehicle</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+' — '+_esc((v.Brand||'')+' '+(v.Model||''))+'</option>';}).join('')+'</select></div>'+
+    '<div id="af-prev-km" style="font-size:12.5px;color:var(--tx3);margin:6px 0 12px;padding:8px 12px;background:var(--sur2);border-radius:8px;display:none"></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date *</label><input type="date" id="af-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Current KM</label><input type="number" id="af-km" placeholder="Odometer reading" oninput="_fuelCalc()"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Fuel Qty (L) *</label><input type="number" id="af-qty" placeholder="e.g. 30" step="0.1" oninput="_fuelCalc()"></div>'+
+    '<div class="fgrp"><label>Amount (₹) *</label><input type="number" id="af-amt" placeholder="e.g. 3000" oninput="_fuelCalc()"></div></div>'+
+    '<div id="af-calc" class="calc-preview" style="display:none"></div>'+
+    '<div class="fgrp"><label>Pump Name</label><input id="af-pump" placeholder="e.g. HPCL Rohini"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddFuel()"><i class="fas fa-gas-pump"></i> Add Fuel Entry</button></div>';
+  _modal('Add Fuel Entry',body);
+}
+function _fuelVehChange(){
+  var vID=document.getElementById('af-veh').value;
+  var el=document.getElementById('af-prev-km');
+  if(!vID){if(el)el.style.display='none';return;}
+  var v=_vehicleByID(vID);
+  if(v&&el){el.textContent='Last KM: '+Number(v.CurrentKM||0).toLocaleString('en-IN')+' km';el.style.display='block';}
+}
+function _fuelCalc(){
+  var qty=parseFloat(document.getElementById('af-qty').value||0);
+  var amt=parseFloat(document.getElementById('af-amt').value||0);
+  var km=parseFloat(document.getElementById('af-km').value||0);
+  var vID=document.getElementById('af-veh').value;
+  var v=vID?_vehicleByID(vID):null;
+  var prevKM=v?Number(v.CurrentKM||0):0;
+  var el=document.getElementById('af-calc');if(!el)return;
+  if(qty<=0&&amt<=0){el.style.display='none';return;}
+  var rate=qty>0&&amt>0?(amt/qty).toFixed(2):0;
+  var dist=km>0&&prevKM>0&&km>prevKM?km-prevKM:0;
+  var mileage=qty>0&&dist>0?(dist/qty).toFixed(1):0;
+  var mCol=mileage>0&&mileage<6?'color:var(--R);font-weight:800':mileage>=12?'color:var(--G);font-weight:700':'';
+  el.style.display='flex';
+  el.innerHTML='⛽ Rate: <b>₹'+rate+'/L</b>'+(dist>0?' &nbsp;|&nbsp; Distance: <b>'+dist+' km</b>':'')+(mileage>0?' &nbsp;|&nbsp; Mileage: <b style="'+mCol+'">'+mileage+' km/L</b>':'');
+}
+function submitAddFuel(){
+  var vID=document.getElementById('af-veh').value;
+  var qty=document.getElementById('af-qty').value;
+  var amt=document.getElementById('af-amt').value;
+  if(!vID){_toast('Vehicle select karo','warn');return;}
+  if(!qty||!amt){_toast('Qty aur amount zaroori hain','warn');return;}
+  var v=_vehicleByID(vID);
+  var data={vehicleID:vID,date:document.getElementById('af-date').value,
+    kmReading:document.getElementById('af-km').value||0,
+    previousKM:v?Number(v.CurrentKM||0):0,
+    fuelQty:qty,amount:amt,pumpName:document.getElementById('af-pump').value.trim()};
+  closeModal();_showLoader('Adding fuel entry...');
+  _gas('addFuel',[data],function(r){
+    _hideLoader();
+    if(r&&r.success){_toast('Fuel entry added! Mileage: '+(r.mileage||'—')+' km/L ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _downloadFuelCSV(){
+  var rows=[['Vehicle','Driver','Date','KM','Prev KM','Distance','Qty(L)','Amount','Rate/L','Mileage','Pump']];
+  (_D.fuel||[]).forEach(function(f){
+    rows.push([_vehicleNo(f.VehicleID),_driverName(f.DriverID),f.Date,f.KMReading,f.PreviousKM,f.DistanceTravelled,f.FuelQty,f.Amount,f.CostPerLiter,f.Mileage,f.PumpName||'']);
+  });
+  _downloadCSV('ISE_Fuel_'+_today()+'.csv',rows);
 }
 
-function _table(headers, rows) {
-  if (!rows || rows.length === 0) return _emptyState('📭', 'Koi data nahi', 'Abhi tak koi record nahi hai');
-  return '<div class="table-wrap"><table><thead><tr>' +
-    headers.map(function(h){ return '<th>' + h + '</th>'; }).join('') +
-    '</tr></thead><tbody>' +
-    rows.map(function(r){ return '<tr>' + r.map(function(c){ return '<td>' + (c !== undefined && c !== null ? c : '—') + '</td>'; }).join('') + '</tr>'; }).join('') +
-    '</tbody></table></div>';
+// ── CHECKLIST (Admin/Manager) ─────────────────────────────────────────────────
+function _vChecklist(){
+  var chk=_D.checklists||[];
+  var today=_today();
+  var done=chk.filter(function(c){return c.Status==='Done';}).length;
+  var pending=chk.filter(function(c){return c.Status==='Pending';}).length;
+
+  var html=_ph('Checklist — Today',
+    '<button class="btn btn-sm btn-ghost" onclick="_loadV(\'checklist_setup\')"><i class="fas fa-sliders"></i> Task Setup</button>'+
+    '<button class="btn btn-sm" onclick="_refreshChecklist()"><i class="fas fa-rotate-right"></i> Refresh</button>');
+
+  html+='<div class="finance-strip" style="margin-bottom:16px">'+
+    '<div class="fs-item"><div class="fs-label">Done</div><div class="fs-val" style="color:var(--G)">'+done+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Pending</div><div class="fs-val" style="color:var(--O)">'+pending+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Total</div><div class="fs-val">'+chk.length+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Completion</div><div class="fs-val">'+(chk.length?Math.round(done/chk.length*100):0)+'%</div></div></div>';
+
+  if(!chk.length)return html+_emptyState('✅','No tasks today','Set up tasks in Task Setup');
+
+  // Group by driver
+  var byDriver={};
+  chk.forEach(function(c){
+    var key=c.TaskType==='Shared'?'__shared__':String(c.AssignedTo||'__unknown__');
+    if(!byDriver[key])byDriver[key]=[];
+    byDriver[key].push(c);
+  });
+
+  Object.keys(byDriver).forEach(function(key){
+    var items=byDriver[key];
+    var label=key==='__shared__'?'🔄 Shared Tasks':key==='__unknown__'?'Unassigned':_driverName(key);
+    html+='<div class="sec-hdr">'+_esc(label)+'</div>';
+    items.forEach(function(c){
+      var isDone=c.Status==='Done';
+      var isShared=c.TaskType==='Shared';
+      html+='<div class="list-card" style="cursor:default">'+
+        '<div style="display:flex;align-items:center;gap:12px">'+
+        '<div style="font-size:20px">'+(isDone?'✅':'🔲')+'</div>'+
+        '<div style="flex:1">'+
+        '<div style="font-size:13px;font-weight:700;color:var(--tx)">'+_esc(c.TaskName)+(isShared?'<span class="shared-badge">Shared</span>':'')+'</div>'+
+        '<div style="font-size:11.5px;color:var(--tx3);margin-top:3px">'+
+        (isDone?'✓ Done by <b>'+_esc(c.ClaimedByName)+'</b> at '+_esc(c.ClaimedAt||''):'⏳ Pending — '+_esc(c.PlannedTime||''))+
+        '</div></div>'+
+        '<span class="badge '+(isDone?'badge-completed':'badge-pending')+'">'+_esc(c.Status)+'</span></div></div>';
+    });
+  });
+  return html;
+}
+function _refreshChecklist(){
+  _showLoader('Generating checklist...');
+  _gas('generateChecklist',[],function(r){
+    _hideLoader();
+    if(r&&r.success){_toast('Checklist refreshed! '+r.rows+' tasks ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
 }
 
-function _emptyState(icon, title, sub) {
-  return '<div class="empty-state"><div class="es-icon">' + icon + '</div><div class="es-title">' + title + '</div><div class="es-sub">' + sub + '</div></div>';
+// ── CHECKLIST SETUP ───────────────────────────────────────────────────────────
+function _vChecklistSetup(){
+  var tasks=_D.taskList||[];
+  var html=_ph('Task Setup',
+    '<button class="btn btn-sm" onclick="openAddTask()"><i class="fas fa-plus"></i> Add Task</button>');
+
+  if(!tasks.length)return html+_emptyState('📋','No tasks setup','Create recurring tasks for drivers');
+
+  html+='<div style="display:flex;flex-direction:column;gap:8px">';
+  tasks.forEach(function(t){
+    var active=t.Status==='Active';
+    var isShared=t.TaskType==='Shared';
+    var assignees=String(t.AssignedToName||t.AssignedTo||'—');
+    var freqMap={D:'Daily',W:'Weekly',M:'Monthly','One-time':'One-time'};
+    html+='<div class="list-card">'+
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">'+
+      '<div style="flex:1">'+
+      '<div style="font-size:13.5px;font-weight:800;color:var(--tx)">'+_esc(t.TaskName)+(isShared?'<span class="shared-badge">Shared</span>':'')+'</div>'+
+      '<div style="font-size:12px;color:var(--tx3);margin-top:4px">'+
+      '<i class="fas fa-user"></i> '+_esc(assignees)+' &nbsp;·&nbsp; '+
+      '<i class="fas fa-repeat"></i> '+(freqMap[t.Frequency]||t.Frequency)+' &nbsp;·&nbsp; '+
+      '<i class="fas fa-clock"></i> '+_esc(t.StartTime||'—')+'</div></div>'+
+      '<div style="display:flex;gap:6px;align-items:center">'+
+      '<span class="badge '+(active?'badge-active':'badge-inactive')+'">'+_esc(t.Status)+'</span>'+
+      (active?'<button class="btn btn-xs btn-ghost" onclick="deactivateTask(\''+t.TaskUID+'\')">Deactivate</button>':'')+
+      '</div></div></div>';
+  });
+  html+='</div>';
+  return html;
+}
+function openAddTask(){
+  var drv=(_D.drivers||[]).filter(function(d){return d.Status==='Active';});
+  var drvOpts=drv.map(function(d){return'<option value="'+d.DriverID+'">'+_esc(d.Name)+'</option>';}).join('');
+  var freqOpts=APP_CONFIG.TASK_FREQ.map(function(f){return'<option value="'+f.val+'">'+f.label+'</option>';}).join('');
+
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Task Name *</label><input id="at-name" placeholder="e.g. Vehicle Interior Cleaning"></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Task Type *</label>'+
+    '<select id="at-type" onchange="_taskTypeChange()">'+
+    '<option value="Individual">Individual — One driver</option>'+
+    '<option value="Shared">Shared — First to claim wins</option></select></div>'+
+    '<div class="fgrp"><label>Frequency *</label><select id="at-freq">'+freqOpts+'</select></div></div>'+
+    '<div class="fgrp"><label>Assign To *</label>'+
+    '<select id="at-drv-single"><option value="">Select Driver</option>'+drvOpts+'</select></div>'+
+    '<div class="fgrp" id="at-shared-wrap" style="display:none"><label>Assign To (Multiple — Shared)</label>'+
+    '<div style="display:flex;flex-direction:column;gap:4px">'+
+    drv.map(function(d){return'<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;background:var(--sur2)"><input type="checkbox" class="at-drv-chk" value="'+d.DriverID+'" data-name="'+_esc(d.Name)+'"> '+_esc(d.Name)+'</label>';}).join('')+'</div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Start Date</label><input type="date" id="at-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Start Time</label><input type="time" id="at-time" value="08:00"></div></div>'+
+    '<div class="fgrp"><label>Notes</label><textarea id="at-notes" placeholder="Task instructions (optional)"></textarea></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddTask()"><i class="fas fa-plus"></i> Create Task</button></div>';
+  _modal('Add Task',body);
+}
+function _taskTypeChange(){
+  var t=document.getElementById('at-type').value;
+  document.getElementById('at-drv-single').parentElement.style.display=t==='Individual'?'block':'none';
+  document.getElementById('at-shared-wrap').style.display=t==='Shared'?'block':'none';
+}
+function submitAddTask(){
+  var name=document.getElementById('at-name').value.trim();
+  var type=document.getElementById('at-type').value;
+  if(!name){_toast('Task name zaroori hai','warn');return;}
+  var assignedTo,assignedToName;
+  if(type==='Shared'){
+    var checked=Array.from(document.querySelectorAll('.at-drv-chk:checked'));
+    if(!checked.length){_toast('Kam se kam ek driver select karo','warn');return;}
+    assignedTo=checked.map(function(c){return c.value;}).join(',');
+    assignedToName=checked.map(function(c){return c.dataset.name;}).join('/');
+  } else {
+    assignedTo=document.getElementById('at-drv-single').value;
+    if(!assignedTo){_toast('Driver select karo','warn');return;}
+    assignedToName=_driverName(assignedTo);
+  }
+  var data={taskName:name,taskType:type,assignedTo:assignedTo,assignedToName:assignedToName,
+    frequency:document.getElementById('at-freq').value,
+    startDate:document.getElementById('at-date').value,
+    startTime:document.getElementById('at-time').value,
+    notes:document.getElementById('at-notes').value.trim()};
+  closeModal();_showLoader('Creating task...');
+  _gas('saveTask',[data],function(r){
+    _hideLoader();
+    if(r&&r.success){_toast('Task created! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function deactivateTask(uid){
+  if(!confirm('Is task ko deactivate karna hai?'))return;
+  _gas('deactivateTask',[uid],function(r){
+    if(r&&r.success){_toast('Task deactivated','success');_loadAllData(true);}
+  },function(e){_toast(e.message,'err');});
 }
 
-function _fGroup(label, type, id, val, ph) {
-  return '<div class="f-group"><label>' + label + '</label>' +
-    '<input type="' + type + '" id="' + id + '" value="' + (val||'') + '"' + (ph ? ' placeholder="' + ph + '"' : '') + '></div>';
+// ── DELEGATION ────────────────────────────────────────────────────────────────
+function _vDelegation(){
+  var dels=_D.delegations||[];
+  var html=_ph('Delegation / Tasks',
+    '<button class="btn btn-sm" onclick="openCreateDelegation()"><i class="fas fa-plus"></i> New Task</button>');
+
+  var pending=dels.filter(function(d){return d.status==='Pending';}).length;
+  var overdue=dels.filter(function(d){return d.is_overdue;}).length;
+  var completed=dels.filter(function(d){return d.status==='Completed';}).length;
+
+  html+='<div class="finance-strip" style="margin-bottom:16px">'+
+    '<div class="fs-item"><div class="fs-label">Pending</div><div class="fs-val" style="color:var(--O)">'+pending+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Overdue</div><div class="fs-val" style="color:var(--R)">'+overdue+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Completed</div><div class="fs-val" style="color:var(--G)">'+completed+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Total</div><div class="fs-val">'+dels.length+'</div></div></div>';
+
+  html+='<div style="display:flex;gap:8px;margin-bottom:14px">'+
+    '<select id="del-filter" onchange="_filterDel()" style="padding:8px 12px;border:1.5px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--sur);color:var(--tx);font-family:inherit">'+
+    '<option value="">All</option><option value="Pending">Pending</option><option value="Completed">Completed</option><option value="overdue">Overdue</option></select>'+
+    '<div class="search-bar" style="flex:1;margin-bottom:0"><i class="fas fa-search"></i><input id="del-search" placeholder="Search task or driver..." oninput="_filterDel()"></div></div>';
+
+  if(!dels.length)return html+_emptyState('📌','No delegations','Create your first task assignment');
+  html+='<div id="del-list">'+_renderDelList(dels)+'</div>';
+  return html;
+}
+function _filterDel(){
+  var f=document.getElementById('del-filter').value;
+  var q=(document.getElementById('del-search').value||'').toLowerCase();
+  var dels=(_D.delegations||[]).filter(function(d){
+    if(f==='overdue')return d.is_overdue;
+    if(f&&d.status!==f)return false;
+    if(q){return (d.task_desc||'').toLowerCase().includes(q)||(d.delegated_to_name||'').toLowerCase().includes(q);}
+    return true;
+  });
+  var el=document.getElementById('del-list');if(el)el.innerHTML=_renderDelList(dels);
+}
+function _renderDelList(dels){
+  if(!dels.length)return _emptyState('🔍','No results','No tasks match filter');
+  return dels.map(function(d){
+    var sCol=d.status==='Completed'?'badge-completed':d.is_overdue?'badge-high':'badge-pending';
+    return '<div class="del-card'+(d.is_overdue?' overdue':d.status==='Completed'?' completed':'')+'" onclick="openDelDetail(\''+d.task_id+'\')">'+
+      '<div class="del-head">'+
+      '<div class="del-task">'+_esc(d.task_desc)+'</div>'+
+      '<span class="badge '+sCol+'">'+_esc(d.is_overdue?'Overdue':d.status)+'</span></div>'+
+      '<div class="del-meta">'+
+      '<span class="del-meta-item"><i class="fas fa-id-badge"></i> '+_esc(d.delegated_to_name)+'</span>'+
+      '<span class="del-meta-item"><i class="fas fa-calendar"></i> Due: '+_fmtDate(d.final_date)+'</span>'+
+      '<span class="del-meta-item"><i class="fas fa-user"></i> By: '+_esc(d.delegated_by_name)+'</span>'+
+      (d.revision_1?'<span class="del-meta-item" style="color:var(--O)"><i class="fas fa-rotate-right"></i> Rev '+( d.revision_2?'2':'1')+'</span>':'')+
+      '</div></div>';
+  }).join('');
+}
+function openDelDetail(taskID){
+  var dels=_D.delegations||[];
+  var d=dels.filter(function(x){return x.task_id===taskID;})[0];if(!d)return;
+  var body='<div class="detail-grid">'+
+    _dr('Task',d.task_desc)+_dr('Assigned To',d.delegated_to_name)+
+    _dr('Delegated By',d.delegated_by_name)+_dr('First Date',_fmtDate(d.first_date))+
+    _dr('Final Due',_fmtDate(d.final_date))+_dr('Status',d.status)+
+    (d.revision_1?_dr('Revision 1',_fmtDate(d.revision_1)):'')+
+    (d.revision_2?_dr('Revision 2',_fmtDate(d.revision_2)):'')+
+    (d.completion_remarks?_dr('Completion Remarks',d.completion_remarks):'')+
+    (d.actual_close_date?_dr('Closed On',_fmtDate(d.actual_close_date)):'')+
+    '</div>';
+  if(d.status!=='Completed'){
+    body+='<div style="display:flex;gap:8px;margin-top:14px">'+
+      '<button class="btn btn-success btn-sm" onclick="markDelComplete(\''+taskID+'\')"><i class="fas fa-check"></i> Mark Complete</button>'+
+      '<button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button></div>';
+  }
+  _modal('Task Detail',body);
+}
+function markDelComplete(taskID){
+  var remarks=prompt('Completion remarks (optional):');
+  closeModal();_showLoader('Updating...');
+  _gas('completeDelegation',[taskID,remarks||'',''],function(r){
+    _hideLoader();
+    if(r&&r.success){_toast('Task completed! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function openCreateDelegation(){
+  var drv=(_D.drivers||[]).filter(function(d){return d.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Assign To *</label>'+
+    '<select id="cd-drv"><option value="">Select Driver/Staff</option>'+
+    drv.map(function(d){return'<option value="'+d.DriverID+'|'+_esc(d.Name)+'">'+_esc(d.Name)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Task Description *</label>'+
+    '<textarea id="cd-desc" placeholder="Describe the task clearly..." style="min-height:90px"></textarea></div>'+
+    '<div class="fgrp"><label>Due Date *</label><input type="date" id="cd-date" min="'+_today()+'"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitCreateDelegation()"><i class="fas fa-paper-plane"></i> Assign Task</button></div>';
+  _modal('Assign New Task',body);
+}
+function submitCreateDelegation(){
+  var drvVal=document.getElementById('cd-drv').value;
+  var desc=document.getElementById('cd-desc').value.trim();
+  var date=document.getElementById('cd-date').value;
+  if(!drvVal||!desc||!date){_toast('Sab fields zaroori hain','warn');return;}
+  var parts=drvVal.split('|');
+  var data={delegatedTo:parts[0],delegatedToName:parts[1]||'',taskDesc:desc,firstDate:date};
+  closeModal();_showLoader('Assigning task...');
+  _gas('createDelegation',[data],function(r){
+    _hideLoader();
+    if(r&&r.success){_toast('Task assigned! WA sent ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
 }
 
-function _fGroupTA(label, id, ph) {
-  return '<div class="f-group"><label>' + label + '</label><textarea id="' + id + '" placeholder="' + (ph||'') + '" rows="2"></textarea></div>';
+// ── LEAVE REQUESTS (Admin/Manager) ────────────────────────────────────────────
+function _vLeaveRequests(){
+  var leaves=_D.leaveRequests||[];
+  var pending=leaves.filter(function(l){return l.status==='Pending';}).length;
+  var html=_ph('Leave Management','');
+
+  html+='<div class="finance-strip" style="margin-bottom:14px">'+
+    '<div class="fs-item"><div class="fs-label">Pending</div><div class="fs-val" style="color:var(--O)">'+pending+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Approved</div><div class="fs-val" style="color:var(--G)">'+leaves.filter(function(l){return l.status==='Approved';}).length+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Rejected</div><div class="fs-val" style="color:var(--R)">'+leaves.filter(function(l){return l.status==='Rejected';}).length+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Total</div><div class="fs-val">'+leaves.length+'</div></div></div>';
+
+  html+='<select id="lv-filter" onchange="_filterLeaves()" style="padding:8px 12px;border:1.5px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--sur);color:var(--tx);font-family:inherit;margin-bottom:14px">'+
+    '<option value="">All Requests</option><option value="Pending" selected>Pending</option><option value="Approved">Approved</option><option value="Rejected">Rejected</option></select>';
+
+  if(!leaves.length)return html+_emptyState('📅','No leave requests','No leaves submitted yet');
+
+  var shown=leaves.filter(function(l){return l.status==='Pending';});
+  html+='<div id="lv-list">'+_renderLeaveList(shown)+'</div>';
+  return html;
+}
+function _filterLeaves(){
+  var f=document.getElementById('lv-filter').value;
+  var shown=(_D.leaveRequests||[]).filter(function(l){return !f||l.status===f;});
+  var el=document.getElementById('lv-list');if(el)el.innerHTML=_renderLeaveList(shown);
+}
+function _renderLeaveList(leaves){
+  if(!leaves.length)return _emptyState('📅','No requests','No leave requests here');
+  return leaves.map(function(l){
+    var sCol=l.status==='Approved'?'badge-approved':l.status==='Rejected'?'badge-rejected':l.status==='Cancelled'?'badge-inactive':'badge-pending';
+    return '<div class="leave-card">'+
+      '<div class="leave-head">'+
+      '<div>'+
+      '<div class="leave-type">'+_esc(l.driver_name)+' — '+_esc(l.leave_type)+'</div>'+
+      '<div class="leave-dates"><i class="fas fa-calendar"></i> '+_fmtDate(l.from_date)+' → '+_fmtDate(l.to_date)+' ('+l.num_days+' day'+(l.num_days>1?'s':'')+')</div></div>'+
+      '<span class="badge '+sCol+'">'+_esc(l.status)+'</span></div>'+
+      '<div class="leave-reason">'+_esc(l.reason||'No reason given')+'</div>'+
+      (l.status==='Pending'?
+        '<div class="leave-action-row">'+
+        '<button class="btn btn-success btn-sm" onclick="approveLeave(\''+l.request_id+'\',\'Approved\')"><i class="fas fa-check"></i> Approve</button>'+
+        '<button class="btn btn-danger btn-sm" onclick="approveLeave(\''+l.request_id+'\',\'Rejected\')"><i class="fas fa-times"></i> Reject</button></div>':
+        (l.remark?'<div style="font-size:12px;color:var(--tx3);margin-top:6px"><i class="fas fa-comment"></i> '+_esc(l.remark)+'</div>':'')
+      )+'</div>';
+  }).join('');
+}
+function approveLeave(reqID,decision){
+  var remark='';
+  if(decision==='Rejected'){remark=prompt('Rejection reason (optional):');}
+  _showLoader(decision+'...');
+  _gas('approveLeave',[reqID,decision,remark||''],function(r){
+    _hideLoader();
+    if(r&&r.success){_toast('Leave '+decision+'! WA sent ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _openAddLeaveApproval(dID){}
+
+// ── HOLIDAYS ──────────────────────────────────────────────────────────────────
+function _vHolidays(){
+  var hols=_D.holidays||[];
+  var today=_today();
+  var upcoming=hols.filter(function(h){return String(h.HolidayDate||'').slice(0,10)>=today&&h.Type!=='Deleted';}).sort(function(a,b){return String(a.HolidayDate||'').localeCompare(String(b.HolidayDate||''));});
+  var past=hols.filter(function(h){return String(h.HolidayDate||'').slice(0,10)<today&&h.Type!=='Deleted';});
+  var isAdmin=_U&&(_U.role==='admin'||_U.role==='manager');
+
+  var html=_ph('Holiday Calendar',isAdmin?'<button class="btn btn-sm" onclick="openAddHoliday()"><i class="fas fa-plus"></i> Add Holiday</button>':'');
+
+  if(!hols.length)return html+_emptyState('🗓️','No holidays set','Add company holidays');
+
+  html+='<div class="sec-hdr"><i class="fas fa-calendar" style="color:var(--P)"></i>Upcoming ('+upcoming.length+')</div>';
+  upcoming.forEach(function(h){
+    var d=new Date(String(h.HolidayDate||'').slice(0,10)+'T00:00:00');
+    var daysLeft=_daysLeft(String(h.HolidayDate||'').slice(0,10));
+    html+='<div class="hol-card">'+
+      '<div class="hol-date"><div class="hol-day">'+d.getDate()+'</div><div class="hol-mon">'+MN[d.getMonth()]+'</div></div>'+
+      '<div style="flex:1"><div class="hol-name">'+_esc(h.HolidayName)+'</div>'+
+      '<div class="hol-type">'+_esc(h.Type||'')+(h.Description?' — '+_esc(h.Description):'')+'</div></div>'+
+      '<div style="text-align:right"><div style="font-size:11px;color:var(--tx3)">'+DAYS[d.getDay()]+'</div>'+
+      '<div style="font-size:11px;color:var(--P);font-weight:700">'+(daysLeft===0?'Today!':daysLeft+'d away')+'</div>'+
+      (isAdmin?'<button class="btn btn-xs btn-ghost" style="margin-top:6px" onclick="deleteHoliday(\''+h.HolidayID+'\')">Remove</button>':'')+
+      '</div></div>';
+  });
+  if(past.length){
+    html+='<div class="sec-hdr" style="margin-top:20px"><i class="fas fa-history" style="color:var(--tx3)"></i>Past ('+past.length+')</div>';
+    past.slice(-5).reverse().forEach(function(h){
+      html+='<div class="hol-card" style="opacity:.6">'+
+        '<div class="hol-date" style="background:var(--sur2)"><div class="hol-day" style="color:var(--tx3)">'+new Date(String(h.HolidayDate||'').slice(0,10)+'T00:00:00').getDate()+'</div>'+
+        '<div class="hol-mon">'+MN[new Date(String(h.HolidayDate||'').slice(0,10)+'T00:00:00').getMonth()]+'</div></div>'+
+        '<div><div class="hol-name">'+_esc(h.HolidayName)+'</div><div class="hol-type">'+_esc(h.Type||'')+'</div></div></div>';
+    });
+  }
+  return html;
+}
+function openAddHoliday(){
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Holiday Name *</label><input id="ah-name" placeholder="e.g. Diwali"></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date *</label><input type="date" id="ah-date"></div>'+
+    '<div class="fgrp"><label>Type</label><select id="ah-type">'+
+    ['National','Religious','Optional','Company'].map(function(t){return'<option>'+t+'</option>';}).join('')+'</select></div></div>'+
+    '<div class="fgrp"><label>Description</label><input id="ah-desc" placeholder="Optional description"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddHoliday()"><i class="fas fa-plus"></i> Add Holiday</button></div>';
+  _modal('Add Holiday',body);
+}
+function submitAddHoliday(){
+  var name=document.getElementById('ah-name').value.trim();
+  var date=document.getElementById('ah-date').value;
+  if(!name||!date){_toast('Name aur date zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding...');
+  _gas('addHoliday',[{holidayName:name,holidayDate:date,type:document.getElementById('ah-type').value,description:document.getElementById('ah-desc').value.trim()}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Holiday added! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function deleteHoliday(id){
+  if(!confirm('Remove this holiday?'))return;
+  _gas('deleteHoliday',[id],function(r){if(r&&r.success){_toast('Removed','success');_loadAllData(true);}});
 }
 
-function _fab(icon, fn) {
-  return '<button class="fab" onclick="' + fn + '">' + icon + '</button>';
+// ── ANNOUNCEMENTS ─────────────────────────────────────────────────────────────
+function _vAnnouncements(){
+  var anns=_D.announcements||[];
+  var isAdmin=_U&&(_U.role==='admin'||_U.role==='manager');
+  var html=_ph('Announcements',isAdmin?'<button class="btn btn-sm" onclick="openPostAnn()"><i class="fas fa-plus"></i> Post</button>':'');
+
+  if(!anns.length)return html+_emptyState('📢','No announcements','Post company-wide announcements');
+  anns.forEach(function(a){
+    var p=String(a.priority||'Normal').toLowerCase();
+    html+='<div class="ann-card '+p+'">'+
+      '<div class="ann-text">'+_esc(a.text)+'</div>'+
+      '<div class="ann-meta">'+
+      '<span><i class="fas fa-user"></i> '+_esc(a.posted_by_name)+'</span>'+
+      '<span><i class="fas fa-clock"></i> '+_fmtDateTime(a.posted_at)+'</span>'+
+      '<span class="badge badge-'+(p==='high'?'high':p==='urgent'?'high':'active')+'">'+_esc(a.priority)+'</span>'+
+      (isAdmin?'<span style="cursor:pointer;color:var(--R);font-size:11px;margin-left:auto" onclick="deleteAnn(\''+a.ann_id+'\')"><i class="fas fa-trash"></i></span>':'')+
+      '</div></div>';
+  });
+  return html;
+}
+function openPostAnn(){
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Announcement Text *</label><textarea id="ann-txt" placeholder="Type announcement..." style="min-height:100px"></textarea></div>'+
+    '<div class="fgrp"><label>Priority</label><select id="ann-pri">'+
+    APP_CONFIG.ANNOUNCE_PRIORITY.map(function(p){return'<option>'+p+'</option>';}).join('')+'</select></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitPostAnn()"><i class="fas fa-bullhorn"></i> Post Announcement</button></div>';
+  _modal('Post Announcement',body);
+}
+function submitPostAnn(){
+  var txt=document.getElementById('ann-txt').value.trim();
+  if(!txt){_toast('Announcement text daalo','warn');return;}
+  closeModal();_showLoader('Posting...');
+  _gas('postAnnouncement',[{text:txt,priority:document.getElementById('ann-pri').value}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Posted! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function deleteAnn(id){
+  if(!confirm('Delete this announcement?'))return;
+  _gas('deleteAnnouncement',[id],function(r){if(r&&r.success){_toast('Deleted','success');_loadAllData(true);}});
 }
 
-function _detailRow(label, val) {
-  return '<div class="dr-row"><div class="dr-label">' + label + '</div><div class="dr-val">' + (val||'—') + '</div></div>';
+// ── PENALTIES & REWARDS ───────────────────────────────────────────────────────
+function _vPenalties(){
+  var pen=_D.penalties||[];
+  var html=_ph('Penalties','<button class="btn btn-sm" onclick="_openAddPenalty(\'\')"><i class="fas fa-plus"></i> Add Penalty</button>');
+  if(!pen.length)return html+_emptyState('⚠️','No penalties','Clean slate!');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Driver</th><th>Date</th><th>Reason</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+  pen.slice().reverse().forEach(function(p){
+    html+='<tr><td><b>'+_esc(_driverName(p.DriverID))+'</b></td>'+
+      '<td>'+_fmtDate(p.Date)+'</td>'+
+      '<td style="max-width:200px">'+_esc(p.Reason)+'</td>'+
+      '<td><b>'+_inr(p.Amount)+'</b></td>'+
+      '<td><span class="badge '+(p.Status==='Paid'?'badge-approved':'badge-pending')+'">'+_esc(p.Status)+'</span></td>'+
+      '<td>'+(p.Status==='Pending'?'<button class="btn btn-xs btn-ghost" onclick="markPenPaid(\''+p.PenaltyID+'\')">Mark Paid</button>':'')+'</td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+function _openAddPenalty(dID){
+  var drv=(_D.drivers||[]).filter(function(d){return d.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Driver *</label><select id="pen-drv"><option value="">Select</option>'+
+    drv.map(function(d){return'<option value="'+d.DriverID+'"'+(d.DriverID===dID?' selected':'')+'>'+_esc(d.Name)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="pen-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Reason *</label><textarea id="pen-reason" placeholder="Reason for penalty..."></textarea></div>'+
+    '<div class="fgrp"><label>Amount (₹)</label><input type="number" id="pen-amt" placeholder="0" value="0"></div>'+
+    '<button class="btn btn-wide btn-lg btn-danger" style="margin-top:12px" onclick="submitAddPenalty()"><i class="fas fa-triangle-exclamation"></i> Add Penalty</button></div>';
+  _modal('Add Penalty',body);
+}
+function submitAddPenalty(){
+  var dID=document.getElementById('pen-drv').value;
+  var reason=document.getElementById('pen-reason').value.trim();
+  if(!dID||!reason){_toast('Driver aur reason zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding penalty...');
+  _gas('addPenalty',[{driverID:dID,date:document.getElementById('pen-date').value,reason:reason,amount:document.getElementById('pen-amt').value||0}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Penalty added! WA sent ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function markPenPaid(id){
+  _gas('updatePenaltyStatus',[id,'Paid'],function(r){if(r&&r.success){_toast('Marked Paid ✅','success');_loadAllData(true);}});
 }
 
-function _modal(title, body) {
-  _qs('#modal-title').textContent = title;
-  _qs('#modal-body').innerHTML    = body;
-  document.getElementById('global-modal').style.display = 'flex';
+function _vRewards(){
+  var rwd=_D.rewards||[];
+  var html=_ph('Rewards','<button class="btn btn-sm" onclick="_openAddReward(\'\')"><i class="fas fa-plus"></i> Add Reward</button>');
+  if(!rwd.length)return html+_emptyState('🏆','No rewards yet','Recognize great work!');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Driver</th><th>Date</th><th>Reason</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+  rwd.slice().reverse().forEach(function(r){
+    html+='<tr><td><b>'+_esc(_driverName(r.DriverID))+'</b></td>'+
+      '<td>'+_fmtDate(r.Date)+'</td>'+
+      '<td>'+_esc(r.Reason)+'</td>'+
+      '<td><b style="color:var(--G)">'+_inr(r.Amount)+'</b></td>'+
+      '<td><span class="badge '+(r.Status==='Paid'?'badge-approved':'badge-pending')+'">'+_esc(r.Status)+'</span></td>'+
+      '<td>'+(r.Status==='Pending'?'<button class="btn btn-xs btn-ghost" onclick="markRwdPaid(\''+r.RewardID+'\')">Mark Paid</button>':'')+'</td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+function _openAddReward(dID){
+  var drv=(_D.drivers||[]).filter(function(d){return d.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Driver *</label><select id="rwd-drv"><option value="">Select</option>'+
+    drv.map(function(d){return'<option value="'+d.DriverID+'"'+(d.DriverID===dID?' selected':'')+'>'+_esc(d.Name)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="rwd-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Reason *</label><textarea id="rwd-reason" placeholder="Reason for reward..."></textarea></div>'+
+    '<div class="fgrp"><label>Amount (₹)</label><input type="number" id="rwd-amt" placeholder="0" value="500"></div>'+
+    '<button class="btn btn-wide btn-lg btn-success" style="margin-top:12px" onclick="submitAddReward()"><i class="fas fa-trophy"></i> Add Reward</button></div>';
+  _modal('Add Reward',body);
+}
+function submitAddReward(){
+  var dID=document.getElementById('rwd-drv').value;
+  var reason=document.getElementById('rwd-reason').value.trim();
+  if(!dID||!reason){_toast('Driver aur reason zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding reward...');
+  _gas('addReward',[{driverID:dID,date:document.getElementById('rwd-date').value,reason:reason,amount:document.getElementById('rwd-amt').value||0}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Reward added! 🏆 WA sent','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function markRwdPaid(id){
+  _gas('updateRewardStatus',[id,'Paid'],function(r){if(r&&r.success){_toast('Marked Paid ✅','success');_loadAllData(true);}});
 }
 
-function closeModal() { document.getElementById('global-modal').style.display = 'none'; }
-
-function _toast(msg, type) {
-  var t = document.createElement('div');
-  t.className = 'toast toast-' + (type||'info'); t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(function(){ t.classList.add('show'); }, 10);
-  setTimeout(function(){ t.classList.remove('show'); setTimeout(function(){ t.remove(); }, 300); }, 3500);
+// ── EXPENSES ──────────────────────────────────────────────────────────────────
+function _vExpenses(){
+  var exp=_D.expenses||[];
+  var html=_ph('Expenses','<button class="btn btn-sm" onclick="openAddExpense()"><i class="fas fa-plus"></i> Add Expense</button>');
+  var mon=_today().slice(0,7);
+  var monExp=exp.filter(function(e){return String(e.Date||'').startsWith(mon);});
+  var total=monExp.reduce(function(s,e){return s+Number(e.Amount||0);},0);
+  var byType={};
+  monExp.forEach(function(e){var t=e.ExpenseType||'Other';byType[t]=(byType[t]||0)+Number(e.Amount||0);});
+  html+='<div class="finance-strip" style="margin-bottom:16px">'+
+    '<div class="fs-item"><div class="fs-label">Month Total</div><div class="fs-val">'+_inr(total)+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Entries</div><div class="fs-val">'+monExp.length+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Highest</div><div class="fs-val">'+
+    (Object.keys(byType).length?_inr(Math.max.apply(null,Object.values(byType))):'₹0')+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Avg</div><div class="fs-val">'+(monExp.length?_inr(Math.round(total/monExp.length)):'₹0')+'</div></div></div>';
+  if(!exp.length)return html+_emptyState('💸','No expenses','Add expense records');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Date</th><th>Type</th><th>Amount</th><th>Mode</th><th>Remarks</th></tr></thead><tbody>';
+  exp.slice().reverse().slice(0,50).forEach(function(e){
+    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(e.VehicleID))+'</span></td>'+
+      '<td>'+_fmtDate(e.Date)+'</td><td>'+_esc(e.ExpenseType)+'</td>'+
+      '<td><b>'+_inr(e.Amount)+'</b></td><td>'+_esc(e.PaymentMode||'—')+'</td>'+
+      '<td style="font-size:12px;color:var(--tx3)">'+_esc(e.Remarks||'—')+'</td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+function openAddExpense(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="ae-veh"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="ae-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Type *</label><select id="ae-type"><option value="">Select</option>'+
+    APP_CONFIG.EXPENSE_TYPES.map(function(t){return'<option>'+t+'</option>';}).join('')+'</select></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Amount (₹) *</label><input type="number" id="ae-amt" placeholder="0"></div>'+
+    '<div class="fgrp"><label>Payment Mode</label><select id="ae-mode">'+
+    APP_CONFIG.PAYMENT_MODES.map(function(m){return'<option>'+m+'</option>';}).join('')+'</select></div></div>'+
+    '<div class="fgrp"><label>Remarks</label><input id="ae-rem" placeholder="Optional remarks"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddExpense()"><i class="fas fa-plus"></i> Add Expense</button></div>';
+  _modal('Add Expense',body);
+}
+function submitAddExpense(){
+  var vID=document.getElementById('ae-veh').value;
+  var amt=document.getElementById('ae-amt').value;
+  var type=document.getElementById('ae-type').value;
+  if(!vID||!amt||!type){_toast('Vehicle, type aur amount zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding...');
+  _gas('addExpense',[{vehicleID:vID,date:document.getElementById('ae-date').value,expenseType:type,amount:amt,paymentMode:document.getElementById('ae-mode').value,remarks:document.getElementById('ae-rem').value.trim()}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Expense added ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
 }
 
-function _showLoader(msg) {
-  var l = document.getElementById('loader');
-  if (l) { l.style.display = 'flex'; l.querySelector('p').textContent = msg||'Loading...'; }
+// ── TRIPS ─────────────────────────────────────────────────────────────────────
+function _vTrips(){
+  var trips=_D.trips||[];
+  var html=_ph('Vehicle Trips','<button class="btn btn-sm" onclick="openAddTrip()"><i class="fas fa-plus"></i> Add Trip</button>');
+  if(!trips.length)return html+_emptyState('🗺️','No trips','Log vehicle trips');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Driver</th><th>Date</th><th>From</th><th>To</th><th>Material</th><th>KM</th></tr></thead><tbody>';
+  trips.slice().reverse().slice(0,50).forEach(function(t){
+    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(t.VehicleID))+'</span></td>'+
+      '<td>'+_esc(_driverName(t.DriverID))+'</td><td>'+_fmtDate(t.Date)+'</td>'+
+      '<td>'+_esc(t.FromLocation)+'</td><td>'+_esc(t.ToLocation)+'</td>'+
+      '<td>'+_esc(t.MaterialType||'—')+'</td><td><b>'+_esc(t.TotalKM||0)+' km</b></td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
 }
-function _hideLoader() { var l = document.getElementById('loader'); if (l) l.style.display = 'none'; }
+function openAddTrip(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="atr-veh"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="atr-date" value="'+_today()+'"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>From Location *</label><input id="atr-from" placeholder="e.g. ISE Depot Rohini"></div>'+
+    '<div class="fgrp"><label>To Location *</label><input id="atr-to" placeholder="e.g. Bhiwadi Plant"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Start KM</label><input type="number" id="atr-skm" placeholder="Odometer at start"></div>'+
+    '<div class="fgrp"><label>End KM</label><input type="number" id="atr-ekm" placeholder="Odometer at end"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Material</label><select id="atr-mat"><option value="">—</option>'+
+    APP_CONFIG.MATERIAL_TYPES.map(function(m){return'<option>'+m+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Weight (MT)</label><input type="number" id="atr-wt" step="0.1" placeholder="0.0"></div></div>'+
+    '<div class="fgrp"><label>Remarks</label><input id="atr-rem" placeholder="Optional"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddTrip()"><i class="fas fa-plus"></i> Log Trip</button></div>';
+  _modal('Log Trip',body);
+}
+function submitAddTrip(){
+  var vID=document.getElementById('atr-veh').value;
+  var from=document.getElementById('atr-from').value.trim();
+  var to=document.getElementById('atr-to').value.trim();
+  if(!vID||!from||!to){_toast('Vehicle, from aur to location zaroori hain','warn');return;}
+  var data={vehicleID:vID,date:document.getElementById('atr-date').value,fromLocation:from,toLocation:to,
+    startKM:document.getElementById('atr-skm').value||0,endKM:document.getElementById('atr-ekm').value||0,
+    materialType:document.getElementById('atr-mat').value,weight:document.getElementById('atr-wt').value||0,
+    remarks:document.getElementById('atr-rem').value.trim()};
+  closeModal();_showLoader('Logging trip...');
+  _gas('addTrip',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('Trip logged! '+r.totalKM+' km ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
 
-// ═══════════════════════════════════════════════════════════════
-// DATA HELPERS
-// ═══════════════════════════════════════════════════════════════
-function _vnum(vehicleID) {
-  var v = (_DATA.vehicles||[]).find(function(x){ return x.VehicleID === vehicleID; });
-  return v ? v.VehicleNo : (vehicleID||'—');
+// ── OTHER ADMIN VIEWS (stubs with real data) ──────────────────────────────────
+function _vDispatch(){
+  var dis=_D.dispatch||[];
+  var html=_ph('Dispatch','<button class="btn btn-sm" onclick="_openAddDispatch()"><i class="fas fa-plus"></i> Add</button>');
+  if(!dis.length)return html+_emptyState('📦','No dispatch records','');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>ID</th><th>Customer</th><th>Material</th><th>Invoice</th><th>Loading</th><th>Delivery</th><th>Status</th></tr></thead><tbody>';
+  dis.slice().reverse().forEach(function(d){
+    html+='<tr><td style="font-size:11px;color:var(--tx3)">'+_esc(d.DispatchID)+'</td>'+
+      '<td><b>'+_esc(d.CustomerName)+'</b></td><td>'+_esc(d.Material)+' '+d.Weight+'MT</td>'+
+      '<td>'+_esc(d.InvoiceNo||'—')+'</td><td>'+_fmtDate(d.LoadingDate)+'</td>'+
+      '<td>'+_fmtDate(d.DeliveryDate)+'</td>'+
+      '<td><span class="badge '+(d.Status==='Delivered'?'badge-completed':d.Status==='In Transit'?'badge-in-progress':'badge-pending')+'">'+_esc(d.Status)+'</span></td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
 }
-function _dname(driverID) {
-  var d = (_DATA.drivers||[]).find(function(x){ return x.DriverID === driverID; });
-  return d ? d.Name : (driverID||'—');
+function _openAddDispatch(){ _toast('Coming soon','info'); }
+
+function _vServices(){
+  var svc=_D.services||[];
+  var html=_ph('Vehicle Services','<button class="btn btn-sm" onclick="openAddService()"><i class="fas fa-plus"></i> Add Service</button>');
+  if(!svc.length)return html+_emptyState('🔧','No service records','');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Date</th><th>Type</th><th>Garage</th><th>Amount</th><th>Status</th></tr></thead><tbody>';
+  svc.slice().reverse().forEach(function(s){
+    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(s.VehicleID))+'</span></td>'+
+      '<td>'+_fmtDate(s.ServiceDate)+'</td><td>'+_esc(s.ServiceType)+'</td>'+
+      '<td>'+_esc(s.GarageName)+'</td><td>'+_inr(s.Amount)+'</td>'+
+      '<td><span class="badge '+(s.Status==='Completed'?'badge-completed':'badge-in-progress')+'">'+_esc(s.Status)+'</span></td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
 }
-function _daysTo(dateStr) {
-  if (!dateStr) return 9999;
-  return Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+function openAddService(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="as-veh"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="as-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Type *</label><select id="as-type"><option value="">Select</option>'+APP_CONFIG.SERVICE_TYPES.map(function(t){return'<option>'+t+'</option>';}).join('')+'</select></div></div>'+
+    '<div class="fgrp"><label>Garage Name *</label><input id="as-garage" placeholder="e.g. SpeedMaster Delhi"></div>'+
+    '<div class="fgrp"><label>Issue / Work Done</label><textarea id="as-issue" placeholder="Describe the service..."></textarea></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Amount (₹)</label><input type="number" id="as-amt" placeholder="0"></div>'+
+    '<div class="fgrp"><label>Next Service Date</label><input type="date" id="as-next"></div></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddService()"><i class="fas fa-plus"></i> Add Service</button></div>';
+  _modal('Add Service Record',body);
 }
-function _today() {
-  var d = new Date();
-  return d.getFullYear() + '-' + _pad(d.getMonth()+1) + '-' + _pad(d.getDate());
+function submitAddService(){
+  var vID=document.getElementById('as-veh').value;
+  var type=document.getElementById('as-type').value;
+  var garage=document.getElementById('as-garage').value.trim();
+  if(!vID||!type||!garage){_toast('Vehicle, type aur garage zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding...');
+  _gas('addService',[{vehicleID:vID,serviceDate:document.getElementById('as-date').value,serviceType:type,garageName:garage,issue:document.getElementById('as-issue').value.trim(),amount:document.getElementById('as-amt').value||0,nextServiceDate:document.getElementById('as-next').value}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Service added ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
 }
-function _thisMonth() {
-  var d = new Date();
-  return d.getFullYear() + '-' + _pad(d.getMonth()+1);
+
+function _vDocuments(){
+  var docs=_D.documents||[];
+  var html=_ph('Vehicle Documents','<button class="btn btn-sm" onclick="openAddDoc()"><i class="fas fa-plus"></i> Add Doc</button>');
+  if(!docs.length)return html+_emptyState('📄','No documents','');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Type</th><th>Number</th><th>Expiry</th><th>Status</th></tr></thead><tbody>';
+  docs.forEach(function(d){
+    var exp=_daysLeft(String(d.ExpiryDate||'').slice(0,10));
+    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(d.VehicleID))+'</span></td>'+
+      '<td>'+_esc(d.DocumentType)+'</td><td>'+_esc(d.DocumentNumber||'—')+'</td>'+
+      '<td style="color:'+(exp<30?'var(--R)':exp<90?'var(--O)':'var(--tx)')+'">'+_fmtDate(d.ExpiryDate)+(exp>=0?' ('+exp+'d)':'')+'</td>'+
+      '<td><span class="badge badge-'+(d.Status==='Active'?'active':'inactive')+'">'+_esc(d.Status)+'</span></td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
 }
-function _pad(n)  { return n < 10 ? '0' + n : '' + n; }
-function _cap(s)  { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
-function _v(id)   { var el = document.getElementById(id); return el ? el.value : ''; }
-function _qs(s)   { return document.querySelector(s); }
-function _abbr(n) {
-  n = parseFloat(n)||0;
-  return n >= 100000 ? (n/100000).toFixed(1)+'L' : n >= 1000 ? (n/1000).toFixed(1)+'K' : ''+n;
+function openAddDoc(){ _toast('Add document form — coming soon','info'); }
+
+function _vReminders(){
+  var rem=_D.reminders||[];
+  var html=_ph('Reminders','<button class="btn btn-sm" onclick="openAddReminder()"><i class="fas fa-plus"></i> Add</button>');
+  if(!rem.length)return html+_emptyState('🔔','No reminders','');
+  html+='<div style="display:flex;flex-direction:column;gap:8px">';
+  rem.slice().reverse().forEach(function(r){
+    var d=_daysLeft(String(r.ReminderDate||'').slice(0,10));
+    var col=d<=0?'var(--R)':d<=7?'var(--R)':d<=30?'var(--O)':'var(--G)';
+    html+='<div class="list-card">'+
+      '<div class="lc-row"><span style="font-size:13px;font-weight:700">'+_esc(_vehicleNo(r.VehicleID))+' — '+_esc(r.ReminderType)+'</span>'+
+      '<span class="badge badge-'+(r.Priority==='High'?'high':r.Priority==='Medium'?'medium':'low')+'">'+_esc(r.Priority)+'</span></div>'+
+      '<div class="lc-meta"><i class="fas fa-calendar" style="color:'+col+'"></i>'+_fmtDate(r.ReminderDate)+
+      (d>=0?' <b style="color:'+col+'">('+d+'d)</b>':'')+'</div>'+
+      (r.Notes?'<div style="font-size:12px;color:var(--tx3);margin-top:4px">'+_esc(r.Notes)+'</div>':'')+
+      (r.Status==='Pending'?'<button class="btn btn-xs btn-ghost" style="margin-top:8px" onclick="markReminderDone(\''+r.ReminderID+'\')">Mark Done</button>':'')+
+      '</div>';
+  });
+  html+='</div>';
+  return html;
 }
-function _nameColor(name) {
-  var colors = ['#D51515','#2980B9','#8E44AD','#27AE60','#E67E22','#16A085','#2B2B2B','#C0392B'];
-  var i = 0;
-  for (var j = 0; j < (name||'').length; j++) i += (name||'').charCodeAt(j);
-  return colors[i % colors.length];
+function openAddReminder(){ _toast('Add reminder — coming soon','info'); }
+function markReminderDone(id){
+  _gas('updateReminderStatus',[id,'Completed'],function(r){if(r&&r.success){_toast('Done ✅','success');_loadAllData(true);}});
 }
-function _initials(name) {
-  return (name||'?').split(' ').slice(0,2).map(function(w){ return w[0]; }).join('').toUpperCase();
+
+function _vMaintenance(){
+  var m=_D.maintenance||[];
+  var html=_ph('Maintenance Schedule','');
+  if(!m.length)return html+_emptyState('🛠️','No maintenance schedules','');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Type</th><th>Last Done</th><th>Next Due</th><th>Status</th></tr></thead><tbody>';
+  m.forEach(function(s){
+    var d=_daysLeft(String(s.NextDueDate||'').slice(0,10));
+    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(s.VehicleID))+'</span></td>'+
+      '<td>'+_esc(s.MaintenanceType)+'</td><td>'+_fmtDate(s.LastDoneDate)+'</td>'+
+      '<td style="color:'+(d<0?'var(--R)':d<=15?'var(--O)':'var(--tx)')+'">'+_fmtDate(s.NextDueDate)+(d>=0?' ('+d+'d)':' Overdue!')+'</td>'+
+      '<td><span class="badge badge-'+(s.Status==='Pending'?'pending':'completed')+'">'+_esc(s.Status)+'</span></td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
 }
+function _vFastag(){
+  var ft=_D.fastag||[];
+  var vList=_D.vehicles||[];
+  var html=_ph('Fastag Transactions','<button class="btn btn-sm" onclick="openAddFastag()"><i class="fas fa-plus"></i> Recharge</button>');
+  html+='<div class="sec-hdr">Current Balances</div>';
+  html+='<div class="kpi-grid">';
+  vList.filter(function(v){return v.Status==='Active';}).forEach(function(v){
+    var bal=Number(v.FastagBalance||0);
+    var col=bal<300?'var(--R)':bal<1000?'var(--O)':'var(--G)';
+    html+=_kpi('fa-tag',col,_inr(bal),v.VehicleNo,bal<300?'⚠️ Low!':'OK');
+  });
+  html+='</div>';
+  if(ft.length){
+    html+='<div class="sec-hdr">Recharge History</div>';
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Date</th><th>Opening</th><th>Recharge</th><th>Closing</th></tr></thead><tbody>';
+    ft.slice().reverse().slice(0,20).forEach(function(f){
+      html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(f.VehicleID))+'</span></td>'+
+        '<td>'+_fmtDate(f.Date)+'</td><td>'+_inr(f.OpeningBalance)+'</td>'+
+        '<td style="color:var(--G);font-weight:700">+'+_inr(f.RechargeAmount)+'</td>'+
+        '<td><b>'+_inr(f.ClosingBalance)+'</b></td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+  return html;
+}
+function openAddFastag(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="aft-veh" onchange="_fastagVehChange()"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'|'+Number(v.FastagBalance||0)+'">'+_esc(v.VehicleNo)+' — Bal: ₹'+Number(v.FastagBalance||0)+'</option>';}).join('')+'</select></div>'+
+    '<div id="aft-bal-show" style="font-size:12px;color:var(--tx3);padding:8px 12px;background:var(--sur2);border-radius:8px;margin:6px 0 12px;display:none"></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="aft-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Recharge Amount (₹) *</label><input type="number" id="aft-amt" placeholder="e.g. 1000"></div></div>'+
+    '<div class="fgrp"><label>Remarks</label><input id="aft-rem" placeholder="Optional"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddFastag()"><i class="fas fa-tag"></i> Recharge Fastag</button></div>';
+  _modal('Fastag Recharge',body);
+}
+function _fastagVehChange(){
+  var val=document.getElementById('aft-veh').value;
+  var el=document.getElementById('aft-bal-show');
+  if(!val||!el){if(el)el.style.display='none';return;}
+  var parts=val.split('|');
+  el.textContent='Current Balance: ₹'+parts[1];el.style.display='block';
+}
+function submitAddFastag(){
+  var val=document.getElementById('aft-veh').value;
+  var amt=document.getElementById('aft-amt').value;
+  if(!val||!amt){_toast('Vehicle aur amount zaroori hain','warn');return;}
+  var parts=val.split('|');
+  closeModal();_showLoader('Recharging...');
+  _gas('addFastag',[{vehicleID:parts[0],opening:Number(parts[1]||0),recharge:amt,date:document.getElementById('aft-date').value,remarks:document.getElementById('aft-rem').value.trim()}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Fastag recharged! New bal: ₹'+r.closingBalance+' ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+function _vKMLogs(){
+  var logs=_D.kmLogs||[];
+  var html=_ph('KM Logs','<button class="btn btn-sm" onclick="openAddKMLog()"><i class="fas fa-plus"></i> Add Log</button>');
+  if(!logs.length)return html+_emptyState('📏','No KM logs','');
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Date</th><th>Odometer</th><th>By</th><th>Remarks</th></tr></thead><tbody>';
+  logs.slice().reverse().forEach(function(l){
+    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(l.VehicleID))+'</span></td>'+
+      '<td>'+_fmtDate(l.Date)+'</td><td><b>'+Number(l.OdometerReading||0).toLocaleString('en-IN')+' km</b></td>'+
+      '<td>'+_esc(l.EnteredBy||'—')+'</td><td style="font-size:12px;color:var(--tx3)">'+_esc(l.Remarks||'—')+'</td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+function openAddKMLog(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="akl-veh"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+' — '+Number(v.CurrentKM||0).toLocaleString('en-IN')+' km</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="akl-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Odometer Reading *</label><input type="number" id="akl-od" placeholder="Current KM reading"></div></div>'+
+    '<div class="fgrp"><label>Remarks</label><input id="akl-rem" placeholder="e.g. Morning reading"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddKMLog()"><i class="fas fa-plus"></i> Add KM Log</button></div>';
+  _modal('Add KM Log',body);
+}
+function submitAddKMLog(){
+  var vID=document.getElementById('akl-veh').value;
+  var od=document.getElementById('akl-od').value;
+  if(!vID||!od){_toast('Vehicle aur odometer zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding...');
+  _gas('addKMLog',[{vehicleID:vID,date:document.getElementById('akl-date').value,odometer:od,remarks:document.getElementById('akl-rem').value.trim()}],function(r){
+    _hideLoader();if(r&&r.success){_toast('KM log added ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ── ANALYTICS ─────────────────────────────────────────────────────────────────
+function _vAnalytics(){
+  var html=_ph('Analytics Dashboard',
+    '<button class="btn btn-sm btn-ghost" onclick="_downloadAnalyticsCSV()"><i class="fas fa-download"></i> CSV</button>'+
+    '<button class="btn btn-sm" onclick="_loadAnalytics()"><i class="fas fa-rotate-right"></i> Refresh</button>');
+
+  var mon=_today().slice(0,7);
+  html+='<div class="ana-toolbar"><div class="ana-row">'+
+    '<div class="ana-grp"><div class="ana-lbl">From</div><input type="date" id="ana-from" class="ana-sel" value="'+mon+'-01"></div>'+
+    '<div class="ana-grp"><div class="ana-lbl">To</div><input type="date" id="ana-to" class="ana-sel" value="'+_today()+'"></div>'+
+    '<button class="btn btn-sm" onclick="_loadAnalytics()"><i class="fas fa-search"></i> Apply</button></div></div>';
+
+  // Quick KPIs from cached data
+  var fuel=_D.fuel||[];var exp=_D.expenses||[];var trips=_D.trips||[];
+  var from=mon+'-01',to=_today();
+  var monFuel=fuel.filter(function(f){var d=String(f.Date||'').slice(0,10);return d>=from&&d<=to;});
+  var monExp=exp.filter(function(e){var d=String(e.Date||'').slice(0,10);return d>=from&&d<=to;});
+  var monTrips=trips.filter(function(t){var d=String(t.Date||'').slice(0,10);return d>=from&&d<=to;});
+  var totFuel=monFuel.reduce(function(s,f){return s+Number(f.Amount||0);},0);
+  var totExp=monExp.reduce(function(s,e){return s+Number(e.Amount||0);},0);
+  var totKM=monTrips.reduce(function(s,t){return s+Number(t.TotalKM||0);},0);
+
+  html+='<div class="kpi-grid" style="margin:16px 0">'+
+    _kpi('fa-gas-pump','#E67E22',_inr(totFuel),'Fuel Spend','This period')+
+    _kpi('fa-receipt','#E74C3C',_inr(totExp+totFuel),'Total Expense','Fuel + others')+
+    _kpi('fa-route','#2980B9',monTrips.length,'Trips','This period')+
+    _kpi('fa-gauge-high','#8E44AD',totKM.toLocaleString('en-IN')+' km','Total Distance','')+
+    '</div>';
+
+  html+='<div class="ana-charts-grid">'+
+    '<div class="ana-chart-card ana-wide"><div class="ana-chart-title"><i class="fas fa-chart-line" style="color:var(--P)"></i>Fuel Spend Trend</div><canvas id="chart-fuel" height="80"></canvas></div>'+
+    '<div class="ana-chart-card"><div class="ana-chart-title"><i class="fas fa-chart-pie" style="color:var(--B)"></i>Expense by Type</div><canvas id="chart-exp"></canvas></div>'+
+    '<div class="ana-chart-card"><div class="ana-chart-title"><i class="fas fa-chart-bar" style="color:var(--G)"></i>Mileage by Vehicle</div><canvas id="chart-mil"></canvas></div>'+
+    '<div class="ana-chart-card"><div class="ana-chart-title"><i class="fas fa-users" style="color:var(--O)"></i>Attendance %</div><canvas id="chart-att"></canvas></div>'+
+    '</div>';
+
+  return html;
+}
+
+function _initAnalyticsCharts(){
+  if(typeof Chart==='undefined')return;
+  var fuel=_D.fuel||[];var exp=_D.expenses||[];
+  var att=_D.attendance||[];var veh=_D.vehicles||[];
+  var mon=_today().slice(0,7);
+  var from=mon+'-01',to=_today();
+
+  // Fuel trend
+  var fuelMap={};
+  fuel.filter(function(f){var d=String(f.Date||'').slice(0,10);return d>=from&&d<=to;})
+    .forEach(function(f){var d=String(f.Date||'').slice(0,10);fuelMap[d]=(fuelMap[d]||0)+Number(f.Amount||0);});
+  var fKeys=Object.keys(fuelMap).sort();
+  _mkChart('chart-fuel','line',fKeys,fKeys.map(function(k){return fuelMap[k];}),['#D51515'],'₹ Fuel');
+
+  // Expense by type
+  var expMap={};
+  exp.filter(function(e){var d=String(e.Date||'').slice(0,10);return d>=from&&d<=to;})
+    .forEach(function(e){var t=e.ExpenseType||'Other';expMap[t]=(expMap[t]||0)+Number(e.Amount||0);});
+  var eKeys=Object.keys(expMap);
+  _mkChart('chart-exp','doughnut',eKeys,eKeys.map(function(k){return expMap[k];}),
+    ['#D51515','#2980B9','#27AE60','#E67E22','#8E44AD','#0D9488'],'');
+
+  // Mileage by vehicle
+  var milMap={};
+  fuel.filter(function(f){var d=String(f.Date||'').slice(0,10);return d>=from&&d<=to;})
+    .forEach(function(f){var v=_vehicleNo(f.VehicleID);var m=parseFloat(f.Mileage||0);if(m>0){if(!milMap[v])milMap[v]=[];milMap[v].push(m);}});
+  var mKeys=Object.keys(milMap);
+  var mVals=mKeys.map(function(k){return(milMap[k].reduce(function(s,v){return s+v;},0)/milMap[k].length).toFixed(1);});
+  _mkChart('chart-mil','bar',mKeys,mVals,['#27AE60'],'km/L');
+
+  // Attendance %
+  var attMap={};
+  att.filter(function(a){var d=String(a.Date||'').slice(0,10);return d>=from&&d<=to;})
+    .forEach(function(a){var n=_driverName(a.DriverID);if(!attMap[n])attMap[n]={p:0,t:0};
+      attMap[n].t++;if(a.Status==='Present'||a.Status==='Late')attMap[n].p++;});
+  var aKeys=Object.keys(attMap).slice(0,8);
+  var aVals=aKeys.map(function(k){return attMap[k].t?Math.round(attMap[k].p/attMap[k].t*100):0;});
+  _mkChart('chart-att','bar',aKeys,aVals,aVals.map(function(v){return v>=90?'#27AE60':v>=70?'#E67E22':'#E74C3C';}),'%');
+}
+
+var _charts={};
+function _mkChart(id,type,labels,data,colors,label){
+  var el=document.getElementById(id);if(!el)return;
+  if(_charts[id]){try{_charts[id].destroy();}catch(e){}}
+  var isDark=document.body.classList.contains('dark');
+  var tc=isDark?'#AAAAAA':'#555555';var gc=isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.06)';
+  _charts[id]=new Chart(el.getContext('2d'),{
+    type:type,
+    data:{labels:labels,datasets:[{label:label||'',data:data,
+      backgroundColor:type==='line'?'rgba(213,21,21,.12)':colors,
+      borderColor:type==='line'?'#D51515':colors,
+      borderWidth:type==='line'?2:0,fill:type==='line',tension:.35,
+      pointBackgroundColor:'#D51515',pointRadius:3}]},
+    options:{responsive:true,plugins:{legend:{display:type==='doughnut',labels:{color:tc,boxWidth:12,font:{size:11}}},tooltip:{callbacks:{label:function(c){return c.label+': '+(label==='₹ Fuel'||label===''?'₹':'')+Number(c.parsed.y||c.parsed||0).toLocaleString('en-IN')+(label==='%'?'%':label==='km/L'?' km/L':'');}}}},
+      scales:type==='doughnut'?{}:{x:{ticks:{color:tc,font:{size:10}},grid:{color:gc}},y:{ticks:{color:tc,font:{size:10}},grid:{color:gc}}}}
+  });
+}
+function _loadAnalytics(){
+  var from=document.getElementById('ana-from').value;
+  var to=document.getElementById('ana-to').value;
+  _showLoader('Loading analytics...');
+  _gas('getAnalytics',[{from:from,to:to}],function(r){
+    _hideLoader();
+    _toast('Analytics updated','success');
+    setTimeout(_initAnalyticsCharts,200);
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _downloadAnalyticsCSV(){
+  var fuel=_D.fuel||[];
+  var rows=[['Vehicle','Driver','Date','Qty','Amount','Mileage']];
+  fuel.forEach(function(f){rows.push([_vehicleNo(f.VehicleID),_driverName(f.DriverID),f.Date,f.FuelQty,f.Amount,f.Mileage]);});
+  _downloadCSV('ISE_Analytics_'+_today()+'.csv',rows);
+}
+
+// ── PAYROLL ───────────────────────────────────────────────────────────────────
+function _vPayroll(){
+  var saved=_D.payroll||[];
+  var html=_ph('Payroll Summary',
+    '<select id="pay-month" style="padding:8px 12px;border:1.5px solid var(--bdr);border-radius:8px;font-size:13px;background:var(--sur);color:var(--tx);font-family:inherit">'+
+    _last6Months().map(function(m){return'<option value="'+m.val+'">'+m.label+'</option>';}).join('')+'</select>'+
+    '<button class="btn btn-sm" onclick="_loadPayroll()"><i class="fas fa-calculator"></i> Calculate</button>'+
+    '<button class="btn btn-sm btn-ghost" onclick="_downloadPayrollCSV()"><i class="fas fa-download"></i> CSV</button>');
+
+  html+='<div id="payroll-result">';
+  if(!saved.length){html+='<div style="padding:32px;text-align:center;color:var(--tx3)"><i class="fas fa-calculator" style="font-size:40px;margin-bottom:12px;display:block;opacity:.3"></i>Select month aur Calculate karein</div>';}
+  else{ html+=_renderPayrollCards(saved); }
+  html+='</div>';
+  return html;
+}
+function _loadPayroll(){
+  var m=document.getElementById('pay-month').value;
+  _showLoader('Calculating payroll...');
+  _gas('getPayrollSummary',[m],function(r){
+    _hideLoader();
+    if(!r||!r.employees){_toast('Payroll calculate nahi hua','err');return;}
+    var el=document.getElementById('payroll-result');
+    if(el)el.innerHTML=_renderPayrollCards(r.employees,r.summary,m);
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _renderPayrollCards(emps,summary,month){
+  var html='';
+  if(summary){
+    html+='<div class="finance-strip" style="margin-bottom:16px">'+
+      '<div class="fs-item"><div class="fs-label">Employees</div><div class="fs-val">'+summary.total+'</div></div>'+
+      '<div class="fs-item"><div class="fs-label">Gross</div><div class="fs-val">'+_inr(summary.total_gross)+'</div></div>'+
+      '<div class="fs-item"><div class="fs-label">Deductions</div><div class="fs-val" style="color:var(--R)">'+_inr(summary.total_deductions)+'</div></div>'+
+      '<div class="fs-item"><div class="fs-label">Net</div><div class="fs-val" style="color:var(--G)">'+_inr(summary.total_net)+'</div></div></div>';
+    if(month)html+='<button class="btn btn-sm btn-success" style="margin-bottom:16px" onclick="_savePayrollData()"><i class="fas fa-save"></i> Save Payroll</button>';
+  }
+  window._lastPayrollData=emps;window._lastPayrollMonth=month;
+  html+='<div class="payroll-grid">';
+  emps.forEach(function(e){
+    var col=_avatarColor(e.driver_name);
+    html+='<div class="payroll-card">'+
+      '<div class="pc-head"><div class="pc-avatar" style="background:'+col+'">'+_initials(e.driver_name)+'</div>'+
+      '<div><div class="pc-name">'+_esc(e.driver_name)+'</div><div class="pc-id">'+_esc(e.driver_id)+'</div></div></div>'+
+      '<div class="pc-row"><span class="pc-lbl">Present</span><span class="pc-val">'+e.present_days+' days</span></div>'+
+      '<div class="pc-row"><span class="pc-lbl">Absent/LWP</span><span class="pc-val" style="color:var(--R)">'+e.absent_days+'/'+e.lwp_days+' days</span></div>'+
+      '<div class="pc-row"><span class="pc-lbl">Gross Salary</span><span class="pc-val">'+_inr(e.gross_salary)+'</span></div>'+
+      '<div class="pc-row pc-deduct"><span class="pc-lbl">Total Deductions</span><span class="pc-val">-'+_inr(e.total_deductions)+'</span></div>'+
+      '<div class="pc-row pc-net"><span class="pc-lbl">Net Payable</span><span class="pc-val">'+_inr(e.net_salary)+'</span></div>'+
+      '</div>';
+  });
+  html+='</div>';
+  return html;
+}
+function _savePayrollData(){
+  if(!window._lastPayrollData||!window._lastPayrollMonth){_toast('Pehle calculate karo','warn');return;}
+  _showLoader('Saving...');
+  _gas('savePayroll',[window._lastPayrollData,window._lastPayrollMonth],function(r){
+    _hideLoader();if(r&&r.success){_toast('Payroll saved! ✅','success');}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _downloadPayrollCSV(){
+  var emps=window._lastPayrollData||(_D.payroll||[]);
+  if(!emps.length){_toast('Pehle payroll calculate karo','warn');return;}
+  var rows=[['Driver','Present','Absent','LWP','Gross','PF','ESI','TDS','LWP Ded','Total Ded','Net']];
+  emps.forEach(function(e){rows.push([e.driver_name||e.driver_id,e.present_days,e.absent_days,e.lwp_days,e.gross_salary,e.pf_deduction,e.esi_deduction,e.tds,e.lwp_deduction,e.total_deductions,e.net_salary]);});
+  _downloadCSV('ISE_Payroll_'+(window._lastPayrollMonth||_today().slice(0,7))+'.csv',rows);
+}
+
+// ── AUDIT LOG ─────────────────────────────────────────────────────────────────
+function _vAuditLog(){
+  var logs=_D.auditLogs||[];
+  var html=_ph('Audit Log','');
+  if(!logs.length)return html+_emptyState('📝','No audit records','');
+  html+='<div class="card"><div class="audit-list">';
+  logs.slice().reverse().slice(0,100).forEach(function(l){
+    html+='<div class="audit-row">'+
+      '<span class="audit-module">'+_esc(l.Module||'—')+'</span>'+
+      '<span class="audit-action">'+_esc(l.Action||'—')+'</span>'+
+      '<span class="audit-id">'+_esc(l.RecordID||'—')+'</span>'+
+      '<span class="audit-by"><i class="fas fa-user"></i> '+_esc(l.PerformedBy||'—')+'</span>'+
+      '<span class="audit-time">'+_fmtDateTime(l.DateTime)+'</span></div>';
+  });
+  html+='</div></div>';
+  return html;
+}
+
+// ── USERS ─────────────────────────────────────────────────────────────────────
+function _vUsers(){
+  var users=_D.users||[];
+  var html=_ph('User Management','<button class="btn btn-sm" onclick="openAddUser()"><i class="fas fa-plus"></i> Add User</button>');
+  if(!users.length)return html+_emptyState('👥','No users','');
+  users.forEach(function(u){
+    var col=_avatarColor(u.Name||'');
+    var rBadge=u.Role==='Admin'?'badge-admin':u.Role==='Manager'?'badge-manager':'badge-driver';
+    html+='<div class="user-card">'+
+      '<div class="uc-avatar" style="background:'+col+'">'+_initials(u.Name||'?')+'</div>'+
+      '<div class="uc-info">'+
+      '<div class="uc-name">'+_esc(u.Name)+'</div>'+
+      '<div class="uc-meta">'+_esc(u.Email)+' &nbsp;·&nbsp; '+_esc(u.Mobile||'—')+'</div>'+
+      '<div style="margin-top:4px"><span class="badge '+rBadge+'">'+_esc(u.Role)+'</span>'+
+      (u.Status!=='Active'?'<span class="badge badge-inactive" style="margin-left:4px">Inactive</span>':'')+'</div>'+
+      '<div class="uc-perms">'+_esc(u.Permissions||'—')+'</div></div>'+
+      '<div style="display:flex;flex-direction:column;gap:4px">'+
+      (u.Status==='Active'?'<button class="btn btn-xs btn-ghost" onclick="toggleUserStatus(\''+u.UserID+'\',\'Inactive\')">Disable</button>':
+        '<button class="btn btn-xs btn-outline" onclick="toggleUserStatus(\''+u.UserID+'\',\'Active\')">Enable</button>')+
+      '</div></div>';
+  });
+  return html;
+}
+function openAddUser(){ _modal('Add User','<div style="padding:16px;color:var(--tx3)">Use Add Driver (with login credentials) to add driver users, or directly edit the Users sheet for admins/managers.</div>'); }
+function toggleUserStatus(uid,status){
+  if(!confirm('Status change karna hai?'))return;
+  _gas('updateUserStatus',[uid,status],function(r){if(r&&r.success){_toast('Status updated ✅','success');_loadAllData(true);}});
+}
+
+// ── SETTINGS ─────────────────────────────────────────────────────────────────
+function _vSettings(){
+  if(!_U)return'';
+  var col=_avatarColor(_U.name||'');
+  var html='<div class="settings-profile">'+
+    '<div class="sp-avatar" style="background:rgba(255,255,255,.2)">'+_initials(_U.name||'')+'</div>'+
+    '<div><div class="sp-name">'+_esc(_U.name)+'</div>'+
+    '<div class="sp-email">'+_esc(_U.email)+'</div>'+
+    '<div style="margin-top:8px"><span style="background:rgba(255,255,255,.2);padding:3px 10px;border-radius:5px;font-size:12px;font-weight:700">'+_esc(_U.role)+'</span></div></div></div>';
+
+  html+='<div class="settings-list">'+
+    '<div class="setting-row" onclick="_changePassword()">'+
+    '<div class="sr-icon"><i class="fas fa-lock"></i></div>'+
+    '<div class="sr-label">Change Password</div><i class="fas fa-chevron-right sr-arrow"></i></div>'+
+    '<div class="setting-row" onclick="toggleDark()">'+
+    '<div class="sr-icon"><i class="fas fa-moon"></i></div>'+
+    '<div class="sr-label">Dark Mode</div><div class="sr-val" id="dk-val">'+(document.body.classList.contains('dark')?'On':'Off')+'</div></div>'+
+    '<div class="setting-row">'+
+    '<div class="sr-icon"><i class="fas fa-building"></i></div>'+
+    '<div class="sr-label">Company</div><div class="sr-val">Isha Steels Enterprises</div></div>'+
+    '<div class="setting-row">'+
+    '<div class="sr-icon"><i class="fas fa-code-branch"></i></div>'+
+    '<div class="sr-label">App Version</div><div class="sr-val">v3.0.0</div></div></div>';
+
+  html+='<div class="sec-hdr">My Permissions</div>'+
+    '<div class="perm-list">'+
+    (_U.permissions||[]).map(function(p){return'<span class="perm-badge">'+_esc(p)+'</span>';}).join('')+'</div>';
+
+  html+='<button class="btn btn-wide btn-danger" style="margin-top:20px" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i> Logout</button>';
+  return html;
+}
+function _changePassword(){
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>New Password *</label><input type="password" id="cp-new" placeholder="New password (min 4 chars)"></div>'+
+    '<div class="fgrp"><label>Confirm Password *</label><input type="password" id="cp-con" placeholder="Repeat new password"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitChangePassword()"><i class="fas fa-lock"></i> Change Password</button></div>';
+  _modal('Change Password',body);
+}
+function submitChangePassword(){
+  var np=document.getElementById('cp-new').value;var cp=document.getElementById('cp-con').value;
+  if(!np||np.length<4){_toast('Password kam se kam 4 characters ka ho','warn');return;}
+  if(np!==cp){_toast('Passwords match nahi kar rahe','warn');return;}
+  closeModal();_showLoader('Changing...');
+  _gas('changePassword',[np],function(r){
+    _hideLoader();if(r&&r.success){_toast('Password changed! ✅','success');}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// DRIVER VIEWS
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── MY DASHBOARD ─────────────────────────────────────────────────────────────
+function _vMyDashboard(){
+  var myVeh=(_D.myVehicle||[])[0]||null;
+  var myDrv=(_D.myDriver||[])[0]||null;
+  var myAtt=_D.myAttendance||[];
+  var myChk=_D.myChecklist||[];
+  var myDel=_D.myDelegations||[];
+  var cels=_D.celebrations||[];
+  var anns=_D.announcements||[];
+  var today=_today();
+  var lb=_D.leaveBalance||{};
+
+  var todayAtt=myAtt.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
+  var hasIN=todayAtt.some(function(a){return a.InTime;});
+  var hasOUT=todayAtt.some(function(a){return a.OutTime;});
+  var mon=today.slice(0,7);
+  var monAtt=myAtt.filter(function(a){return String(a.Date||'').slice(0,10).startsWith(mon);});
+  var pDays=monAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
+
+  var pendingChk=myChk.filter(function(c){return c.status==='Pending';}).length;
+  var pendingDel=myDel.filter(function(d){return d.status==='Pending';}).length;
+  var overdueD=myDel.filter(function(d){return d.is_overdue;}).length;
+
+  var html='';
+
+  // Celebration banners
+  cels.forEach(function(c){
+    html+='<div class="cel-banner"><div class="cel-icon">'+(c.type==='birthday'?'🎂':'🏢')+'</div>'+
+      '<div class="cel-msg"><div class="cel-name">Happy '+(c.type==='birthday'?'Birthday':'Work Anniversary')+' '+_esc(c.name)+'!</div>'+
+      '<div class="cel-sub">From Team ISE 🎉</div></div></div>';
+  });
+
+  // My vehicle card
+  if(myVeh){
+    var insD=_daysLeft(String(myVeh.InsuranceExpiry||'').slice(0,10));
+    var pucD=_daysLeft(String(myVeh.PUCExpiry||'').slice(0,10));
+    html+='<div class="mvc">'+
+      '<div class="mvc-inner">'+
+      '<div class="mvc-left">'+
+      '<div class="mvc-plate">'+_esc(myVeh.VehicleNo)+'</div>'+
+      '<div class="mvc-brand">'+_esc((myVeh.Brand||'')+' '+(myVeh.Model||''))+'</div>'+
+      '<div class="mvc-meta">'+
+      '<span class="mvc-tag">'+_esc(myVeh.FuelType||'')+'</span>'+
+      (insD<30&&insD>=0?'<span class="mvc-tag" style="background:rgba(231,76,60,.3);color:#ffaaaa">Ins: '+insD+'d</span>':'')+
+      (pucD<15&&pucD>=0?'<span class="mvc-tag" style="background:rgba(231,76,60,.3);color:#ffaaaa">PUC: '+pucD+'d</span>':'')+
+      '</div></div>'+
+      '<div class="mvc-right">'+
+      '<div class="mvc-km">'+Number(myVeh.CurrentKM||0).toLocaleString('en-IN')+'</div>'+
+      '<div class="mvc-km-lbl">Current KM</div>'+
+      '<div class="mvc-fastag" style="margin-top:8px">🏷️ ₹'+Number(myVeh.FastagBalance||0)+'</div></div>'+
+      '</div></div>';
+  } else {
+    html+='<div class="alert-card info"><b>No vehicle assigned</b><br>Manager se contact karo.</div>';
+  }
+
+  // Today's attendance status
+  html+='<div class="card" style="margin-bottom:14px">'+
+    '<div style="font-size:13px;font-weight:800;color:var(--tx2);margin-bottom:12px"><i class="fas fa-calendar-check"></i> Today\'s Attendance</div>'+
+    (hasIN&&hasOUT?
+      '<div style="color:var(--G);font-weight:700;font-size:14px">✅ Attendance complete for today</div>':
+      hasIN?
+      '<div style="color:var(--O);font-weight:700;font-size:14px">🟡 Checked IN · Please mark OUT when leaving</div>'+
+      '<button class="btn btn-wide btn-lg" style="margin-top:10px;background:var(--B)" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>':
+      '<div style="color:var(--tx3);font-size:13px;margin-bottom:10px">Not marked yet today</div>'+
+      '<button class="btn btn-wide btn-lg" onclick="_markAttendance(\'in\')"><i class="fas fa-right-to-bracket"></i> Mark IN</button>'
+    )+'</div>';
+
+  // Stats strip
+  html+='<div class="month-strip">'+
+    '<div class="ms-item"><div class="ms-val">'+pDays+'</div><div class="ms-lbl">Present</div></div>'+
+    '<div class="ms-item"><div class="ms-val" style="color:var(--O)">'+pendingChk+'</div><div class="ms-lbl">Tasks</div></div>'+
+    '<div class="ms-item"><div class="ms-val" style="color:'+(overdueD?'var(--R)':'var(--B)')+'">'+pendingDel+'</div><div class="ms-lbl">Delegated</div></div>'+
+    '<div class="ms-item"><div class="ms-val" style="color:var(--G)">'+(lb.total_available||0)+'</div><div class="ms-lbl">Leave Bal</div></div></div>';
+
+  // Big action buttons
+  html+='<div class="big-actions">'+
+    '<button class="ba-btn" style="--kc:#D51515" onclick="_loadV(\'my_inspection\')"><div class="ba-icon">🔍</div><div class="ba-label">Inspection</div></button>'+
+    '<button class="ba-btn" style="--kc:#16A085" onclick="_loadV(\'my_cleaning\')"><div class="ba-icon">🧽</div><div class="ba-label">Cleaning</div></button>'+
+    '<button class="ba-btn" style="--kc:#E67E22" onclick="_loadV(\'my_fuel\')"><div class="ba-icon">⛽</div><div class="ba-label">Fuel</div></button>'+
+    '<button class="ba-btn" style="--kc:#2980B9" onclick="_loadV(\'my_trips\')"><div class="ba-icon">🗺️</div><div class="ba-label">Trip</div></button>'+
+    '<button class="ba-btn" style="--kc:#E74C3C" onclick="_loadV(\'my_expenses\')"><div class="ba-icon">💸</div><div class="ba-label">Expense</div></button>'+
+    '<button class="ba-btn" style="--kc:#8E44AD" onclick="_loadV(\'my_kmlogs\')"><div class="ba-icon">📏</div><div class="ba-label">KM Log</div></button></div>';
+
+  // Today's checklist preview
+  if(myChk.length){
+    html+='<div class="sec-hdr"><i class="fas fa-list-check" style="color:var(--T)"></i>Today\'s Checklist</div>';
+    html+='<div class="daily-checklist">';
+    myChk.slice(0,4).forEach(function(c){
+      var done=c.status==='Done';var taken=c.isTaken;
+      html+='<button class="daily-step'+(done?' is-done':'')+'" onclick="_loadV(\'my_checklist\')" style="cursor:pointer">'+
+        '<span>'+(done?'✅':taken?'🔄':'🔲')+'</span>'+
+        '<b>'+_esc(c.taskName)+(c.taskType==='Shared'?'<span class="shared-badge">Shared</span>':'')+'</b>'+
+        '<em>'+(done?'Done by '+_esc(c.claimedByName):taken?'Claimed by '+_esc(c.claimedByName):'⏳ '+_esc(c.plannedTime))+'</em></button>';
+    });
+    if(myChk.length>4)html+='<div style="font-size:12px;color:var(--P);cursor:pointer;padding:8px 14px" onclick="_loadV(\'my_checklist\')">View all '+myChk.length+' tasks →</div>';
+    html+='</div>';
+  }
+
+  // Announcements
+  if(anns.length){
+    html+='<div class="sec-hdr"><i class="fas fa-bullhorn" style="color:var(--P)"></i>Announcements</div>';
+    anns.slice(0,2).forEach(function(a){
+      html+='<div class="ann-card '+(a.priority||'Normal').toLowerCase()+'">'+
+        '<div class="ann-text">'+_esc(a.text)+'</div>'+
+        '<div class="ann-meta"><i class="fas fa-user"></i>'+_esc(a.posted_by_name)+'</div></div>';
+    });
+  }
+
+  return html;
+}
+
+// ── MARK ATTENDANCE (Driver) ──────────────────────────────────────────────────
+function _markAttendance(type){
+  _showLoader('Getting GPS...');
+  _getGPS(function(gps){
+    var loc=APP_CONFIG.DEPOT_NAME||'ISE Depot';
+    _gas('addAttendance',[{type:type,gps:gps,location:loc,date:_today()}],function(r){
+      _hideLoader();
+      if(r&&r.success){
+        var msg=type==='in'?'✅ Checked IN!':'✅ Checked OUT! Total: '+(r.totalHours||'—');
+        _toast(msg,'success');_loadAllData(true);
+      } else {
+        _hideLoader();_toast('Error: '+(r&&r.error),'err');
+      }
+    },function(e){_hideLoader();_toast(e.message,'err');});
+  },function(err){
+    // GPS failed — proceed without
+    _gas('addAttendance',[{type:type,gps:'',location:APP_CONFIG.DEPOT_NAME||'ISE Depot',date:_today()}],function(r){
+      _hideLoader();
+      if(r&&r.success){_toast((type==='in'?'✅ Checked IN!':'✅ Checked OUT!'),'success');_loadAllData(true);}
+      else _toast('Error: '+(r&&r.error),'err');
+    },function(e){_hideLoader();_toast(e.message,'err');});
+  });
+}
+
+// ── MY ATTENDANCE ─────────────────────────────────────────────────────────────
+function _vMyAttendance(){
+  var att=_D.myAttendance||[];
+  var today=_today();var mon=today.slice(0,7);
+  var todayAtt=att.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
+  var hasIN=todayAtt.some(function(a){return a.InTime;});
+  var hasOUT=todayAtt.some(function(a){return a.OutTime;});
+
+  var html=_ph('My Attendance','');
+
+  // Mark attendance card
+  html+='<div class="card" style="margin-bottom:16px">'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:12px"><i class="fas fa-calendar-check" style="color:var(--G)"></i> Mark Today\'s Attendance</div>';
+  if(hasIN&&hasOUT){
+    var t=todayAtt[0];
+    html+='<div style="background:var(--Gl);padding:12px;border-radius:10px;color:#1A7A40;font-weight:700">'+
+      '✅ Complete — IN: '+_fmtTime(t.InTime)+' · OUT: '+_fmtTime(t.OutTime)+' · '+_esc(t.TotalHours||'')+'</div>';
+  } else if(hasIN){
+    html+='<div style="color:var(--O);font-weight:700;margin-bottom:10px">🟡 Checked IN at '+_fmtTime(todayAtt[0].InTime)+'</div>'+
+      '<button class="btn btn-wide" style="background:var(--B)" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>';
+  } else {
+    html+='<button class="btn btn-wide btn-lg" onclick="_markAttendance(\'in\')"><i class="fas fa-right-to-bracket"></i> Mark IN — '+today+'</button>';
+  }
+  html+='</div>';
+
+  // Monthly summary
+  var monAtt=att.filter(function(a){return String(a.Date||'').slice(0,10).startsWith(mon);});
+  var p=monAtt.filter(function(a){return a.Status==='Present';}).length;
+  var l=monAtt.filter(function(a){return a.Status==='Late';}).length;
+  var ab=monAtt.filter(function(a){return a.Status==='Absent';}).length;
+  html+='<div class="att-summary">'+
+    '<div class="as-item as-present"><div class="as-num">'+p+'</div><div class="as-lbl">Present</div></div>'+
+    '<div class="as-item as-late"><div class="as-num">'+l+'</div><div class="as-lbl">Late</div></div>'+
+    '<div class="as-item as-absent"><div class="as-num">'+ab+'</div><div class="as-lbl">Absent</div></div>'+
+    '<div class="as-item as-total"><div class="as-num">'+monAtt.length+'</div><div class="as-lbl">Marked</div></div></div>';
+
+  if(!att.length)return html+_emptyState('📋','No attendance records yet','Mark IN to start');
+
+  // History
+  html+='<div class="sec-hdr">Recent History</div>';
+  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Day</th><th>IN</th><th>OUT</th><th>Hours</th><th>Status</th></tr></thead><tbody>';
+  att.slice().reverse().slice(0,30).forEach(function(a){
+    var s=a.Status||'—';var sCol=s==='Present'?'badge-present':s==='Late'?'badge-late':s==='Half Day'?'badge-hd':'badge-absent';
+    html+='<tr><td>'+_fmtDate(a.Date)+'</td><td>'+_dayName(String(a.Date||'').slice(0,10)).slice(0,3)+'</td>'+
+      '<td>'+_fmtTime(a.InTime)+'</td><td>'+(_fmtTime(a.OutTime)||'—')+'</td>'+
+      '<td>'+_esc(a.TotalHours||'—')+'</td><td><span class="badge '+sCol+'">'+_esc(s)+'</span></td></tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+
+// ── MY CHECKLIST ──────────────────────────────────────────────────────────────
+function _vMyChecklist(){
+  var chk=_D.myChecklist||[];
+  var done=chk.filter(function(c){return c.status==='Done';}).length;
+  var pending=chk.filter(function(c){return c.status==='Pending'&&!c.isTaken;}).length;
+
+  var html=_ph('My Checklist','');
+  html+='<div class="finance-strip" style="margin-bottom:16px">'+
+    '<div class="fs-item"><div class="fs-label">Done</div><div class="fs-val" style="color:var(--G)">'+done+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Pending</div><div class="fs-val" style="color:var(--O)">'+pending+'</div></div>'+
+    '<div class="fs-item"><div class="fs-label">Total</div><div class="fs-val">'+chk.length+'</div></div></div>';
+
+  if(!chk.length)return html+_emptyState('✅','All clear!','No tasks assigned today');
+
+  chk.forEach(function(c){
+    var done=c.status==='Done';var taken=c.isTaken;
+    var cls='checklist-item'+(done?' done':taken?' taken':'');
+    html+='<div class="'+cls+'">';
+    html+='<div class="ci-icon">'+(done?'✅':taken?'🔄':c.taskType==='Shared'?'👥':'🔲')+'</div>';
+    html+='<div class="ci-body">'+
+      '<div class="ci-name">'+_esc(c.taskName)+(c.taskType==='Shared'?'<span class="shared-badge">Shared</span>':'')+'</div>'+
+      '<div class="ci-meta">'+
+      (done?'✓ Done at '+_esc(c.claimedAt||''):taken?'Claimed by '+_esc(c.claimedByName):'⏳ '+_esc(c.plannedTime||''))+
+      '</div></div>';
+    if(!done&&!taken){
+      if(c.taskType==='Shared'){
+        html+='<button class="btn btn-sm" onclick="claimTask(\''+c.checkID+'\')"><i class="fas fa-hand-pointer"></i> Claim</button>';
+      } else {
+        html+='<button class="btn btn-sm" onclick="openMarkTaskDone(\''+c.checkID+'\')"><i class="fas fa-check"></i> Done</button>';
+      }
+    }
+    html+='</div>';
+  });
+  return html;
+}
+function claimTask(checkID){
+  _showLoader('Claiming task...');
+  _gas('claimTask',[checkID],function(r){
+    _hideLoader();
+    if(r&&r.alreadyClaimed){_toast('Already claimed by '+r.claimedBy,'warn');_loadAllData(true);return;}
+    if(r&&r.success){_toast('Task claimed! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function openMarkTaskDone(checkID){
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Remarks (Optional)</label><textarea id="td-rem" placeholder="Any remarks about this task..."></textarea></div>'+
+    '<button class="btn btn-wide btn-lg btn-success" style="margin-top:12px" onclick="submitMarkTaskDone(\''+checkID+'\')"><i class="fas fa-check"></i> Mark Done</button></div>';
+  _modal('Mark Task Done',body);
+}
+function submitMarkTaskDone(checkID){
+  var remarks=document.getElementById('td-rem').value.trim();
+  closeModal();_showLoader('Marking done...');
+  _gas('markTaskDone',[checkID,remarks,''],function(r){
+    _hideLoader();if(r&&r.success){_toast('Task completed! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ── MY DELEGATIONS ────────────────────────────────────────────────────────────
+function _vMyDelegations(){
+  var dels=_D.myDelegations||[];
+  var html=_ph('My Tasks','');
+  var pending=dels.filter(function(d){return d.status==='Pending';}).length;
+  var overdue=dels.filter(function(d){return d.is_overdue;}).length;
+
+  if(overdue){html+='<div class="alert-card danger"><div class="ac-title">⚠️ '+overdue+' Overdue Task'+(overdue>1?'s':'')+'</div></div>';}
+  if(!dels.length)return html+_emptyState('📌','No tasks assigned','Manager se naya task milega');
+
+  dels.forEach(function(d){
+    html+='<div class="del-card'+(d.is_overdue?' overdue':d.status==='Completed'?' completed':'')+'">'+
+      '<div class="del-head"><div class="del-task">'+_esc(d.task_desc)+'</div>'+
+      '<span class="badge '+(d.status==='Completed'?'badge-completed':d.is_overdue?'badge-high':'badge-pending')+'">'+_esc(d.is_overdue?'Overdue':d.status)+'</span></div>'+
+      '<div class="del-meta">'+
+      '<span class="del-meta-item"><i class="fas fa-calendar"></i> Due: '+_fmtDate(d.final_date)+'</span>'+
+      '<span class="del-meta-item"><i class="fas fa-user"></i> By: '+_esc(d.delegated_by_name)+'</span>'+
+      (d.revision_1?'<span class="del-meta-item" style="color:var(--O)"><i class="fas fa-rotate-right"></i> Revised</span>':'')+
+      '</div>'+
+      (d.status==='Pending'?
+        '<div style="display:flex;gap:8px;margin-top:10px">'+
+        '<button class="btn btn-sm btn-success" onclick="markDelComplete(\''+d.task_id+'\')"><i class="fas fa-check"></i> Mark Done</button>'+
+        '<button class="btn btn-sm btn-ghost" onclick="openRevisionRequest(\''+d.task_id+'\')"><i class="fas fa-calendar"></i> Request Date Change</button></div>':'')+
+      '</div>';
+  });
+  return html;
+}
+function openRevisionRequest(taskID){
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>New Requested Date *</label><input type="date" id="rv-date" min="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Reason</label><textarea id="rv-reason" placeholder="Why you need more time..."></textarea></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitRevision(\''+taskID+'\')"><i class="fas fa-paper-plane"></i> Request Extension</button></div>';
+  _modal('Request Date Change',body);
+}
+function submitRevision(taskID){
+  var date=document.getElementById('rv-date').value;
+  var reason=document.getElementById('rv-reason').value.trim();
+  if(!date){_toast('New date daalo','warn');return;}
+  closeModal();_showLoader('Sending request...');
+  _gas('requestDateRevision',[taskID,date,reason],function(r){
+    _hideLoader();if(r&&r.success){_toast('Request sent to manager! ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ── MY LEAVE ──────────────────────────────────────────────────────────────────
+function _vMyLeave(){
+  var leaves=_D.myLeaves||[];
+  var lb=_D.leaveBalance||{};
+  var html=_ph('My Leave','<button class="btn btn-sm" onclick="openApplyLeave()"><i class="fas fa-plus"></i> Apply Leave</button>');
+
+  // Leave balance
+  html+='<div class="leave-balance">'+
+    '<div class="lb-item"><div class="lb-num lb-cl">'+lb.casual_leave+'</div><div class="lb-lbl">Casual</div></div>'+
+    '<div class="lb-item"><div class="lb-num lb-sl">'+lb.sick_leave+'</div><div class="lb-lbl">Sick</div></div>'+
+    '<div class="lb-item"><div class="lb-num lb-pl">'+lb.paid_leave+'</div><div class="lb-lbl">Paid</div></div>'+
+    '<div class="lb-item"><div class="lb-num" style="color:var(--tx)">'+lb.total_available+'</div><div class="lb-lbl">Total Left</div></div></div>';
+
+  if(!leaves.length)return html+_emptyState('📅','No leave requests','Apply karo');
+  html+='<div class="sec-hdr">My Requests</div>';
+  leaves.forEach(function(l){
+    var sCol=l.status==='Approved'?'badge-approved':l.status==='Rejected'?'badge-rejected':'badge-pending';
+    html+='<div class="leave-card">'+
+      '<div class="leave-head"><div>'+
+      '<div class="leave-type">'+_esc(l.leave_type)+'</div>'+
+      '<div class="leave-dates">'+_fmtDate(l.from_date)+' → '+_fmtDate(l.to_date)+' ('+l.num_days+' day'+(l.num_days>1?'s':'')+')</div></div>'+
+      '<span class="badge '+sCol+'">'+_esc(l.status)+'</span></div>'+
+      '<div class="leave-reason">'+_esc(l.reason||'')+'</div>'+
+      (l.remark?'<div style="font-size:12px;color:var(--tx3);margin-top:6px;padding:8px;background:var(--sur2);border-radius:7px"><i class="fas fa-comment"></i> '+_esc(l.remark)+'</div>':'')+
+      (l.status==='Pending'?'<button class="btn btn-xs btn-ghost" style="margin-top:8px" onclick="cancelLeaveReq(\''+l.request_id+'\')">Cancel Request</button>':'')+
+      '</div>';
+  });
+  return html;
+}
+function openApplyLeave(){
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Leave Type *</label><select id="al-type"><option value="">Select</option>'+
+    APP_CONFIG.LEAVE_TYPES.map(function(t){return'<option>'+t+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>From Date *</label><input type="date" id="al-from" min="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>To Date *</label><input type="date" id="al-to" min="'+_today()+'"></div></div>'+
+    '<div class="fgrp"><label>Reason *</label><textarea id="al-reason" placeholder="Reason for leave..."></textarea></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitApplyLeave()"><i class="fas fa-paper-plane"></i> Apply Leave</button></div>';
+  _modal('Apply for Leave',body);
+}
+function submitApplyLeave(){
+  var type=document.getElementById('al-type').value;
+  var from=document.getElementById('al-from').value;
+  var to=document.getElementById('al-to').value;
+  var reason=document.getElementById('al-reason').value.trim();
+  if(!type||!from||!to||!reason){_toast('Sab fields zaroori hain','warn');return;}
+  if(to<from){_toast('To date, from date se pehle nahi ho sakti','warn');return;}
+  closeModal();_showLoader('Applying...');
+  _gas('requestLeave',[{leaveType:type,fromDate:from,toDate:to,reason:reason}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Leave applied! Manager ko notify kiya ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function cancelLeaveReq(reqID){
+  if(!confirm('Cancel karna hai?'))return;
+  _gas('cancelLeave',[reqID],function(r){if(r&&r.success){_toast('Cancelled','success');_loadAllData(true);}});
+}
+
+// ── MY INSPECTION ─────────────────────────────────────────────────────────────
+function _vMyInspection(){
+  var ins=_D.myInspections||[];
+  var html=_ph('Vehicle Inspection','');
+  var today=_today();
+  var todayIns=ins.filter(function(i){return String(i.Date||'').slice(0,10)===today;});
+
+  if(todayIns.length){
+    html+='<div class="alert-card success" style="margin-bottom:14px"><b>✅ Inspection done today</b><br>'+_fmtDateTime(todayIns[0].CreatedOn)+'</div>';
+  } else {
+    html+='<div class="alert-card info" style="margin-bottom:14px"><b>⚠️ Today\'s inspection pending</b><br>Trip se pehle inspection complete karo.</div>';
+  }
+
+  html+='<div class="form-card">'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:14px"><i class="fas fa-magnifying-glass" style="color:var(--P)"></i> Pre-Trip Inspection</div>';
+
+  html+='<div class="check-rows">';
+  APP_CONFIG.INSPECTION_CHECKS.forEach(function(c){
+    html+='<div class="check-row">'+
+      '<div class="cr-label">'+_esc(c.label)+'</div>'+
+      '<div class="cr-toggle" id="tg-'+c.key+'-grp">'+
+      '<button class="tg-yes" id="tg-'+c.key+'-yes" onclick="setToggle(\''+c.key+'\',\'Yes\',this)">Yes</button>'+
+      '<button class="tg-no active" id="tg-'+c.key+'-no" onclick="setToggle(\''+c.key+'\',\'No\',this)">No</button>'+
+      '</div></div>';
+  });
+  html+='</div>'+
+    '<div class="fgrp" style="margin-top:14px"><label>Remarks</label><input id="ins-rem" placeholder="Any issues or notes..."></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitInspection()"><i class="fas fa-check"></i> Submit Inspection</button></div>';
+
+  if(ins.length){
+    html+='<div class="sec-hdr" style="margin-top:20px">Recent Inspections</div>';
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Status</th><th>Issues</th></tr></thead><tbody>';
+    ins.slice().reverse().slice(0,10).forEach(function(i){
+      var issues=['FuelCheck','TyreCheck','MirrorCheck','FastagCheck','RCCheck','InsuranceCheck','PUCCheck'].filter(function(k){return i[k]==='No';});
+      html+='<tr><td>'+_fmtDate(i.Date)+'</td>'+
+        '<td><span class="badge '+(issues.length?'badge-warning':'badge-completed')+'">'+_esc(i.Status)+'</span></td>'+
+        '<td style="font-size:11.5px;color:var(--tx3)">'+_esc(issues.length?issues.join(', '):'All OK')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+  return html;
+}
+function submitInspection(){
+  var myVeh=(_D.myVehicle||[])[0];
+  if(!myVeh){_toast('No vehicle assigned','err');return;}
+  var data={vehicleID:myVeh.VehicleID,date:_today(),remarks:document.getElementById('ins-rem').value.trim()};
+  APP_CONFIG.INSPECTION_CHECKS.forEach(function(c){data[c.key]=window['_toggle_'+c.key]||'No';});
+  _showLoader('Submitting inspection...');
+  _gas('addInspection',[data],function(r){
+    _hideLoader();
+    if(r&&r.success){
+      var failMsg=r.failed&&r.failed.length?(' Issues: '+r.failed.join(', ')):'All clear!';
+      _toast('Inspection submitted! '+failMsg,'success');_loadAllData(true);
+    } else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ── MY CLEANING ───────────────────────────────────────────────────────────────
+function _vMyCleaning(){
+  var cls=_D.myCleaning||[];
+  var today=_today();
+  var todayCls=cls.filter(function(c){return String(c.Date||'').slice(0,10)===today;});
+  var html=_ph('Vehicle Cleaning','');
+  if(todayCls.length){html+='<div class="alert-card success" style="margin-bottom:14px"><b>✅ Cleaning done today</b></div>';}
+  html+='<div class="form-card">'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:14px"><i class="fas fa-broom" style="color:var(--T)"></i> Cleaning Checklist</div>';
+  html+='<div class="check-rows">';
+  APP_CONFIG.CLEANING_CHECKS.forEach(function(c){
+    html+='<div class="check-row">'+
+      '<div class="cr-label">'+_esc(c.label)+'</div>'+
+      '<div class="cr-toggle">'+
+      '<button class="tg-yes" onclick="setToggle(\''+c.key+'\',\'Yes\',this)">Yes</button>'+
+      '<button class="tg-no active" onclick="setToggle(\''+c.key+'\',\'No\',this)">No</button>'+
+      '</div></div>';
+  });
+  html+='</div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:14px;background:var(--T)" onclick="submitCleaning()"><i class="fas fa-broom"></i> Submit Cleaning</button></div>';
+  return html;
+}
+function submitCleaning(){
+  var myVeh=(_D.myVehicle||[])[0];
+  if(!myVeh){_toast('No vehicle assigned','err');return;}
+  var data={vehicleID:myVeh.VehicleID,date:_today()};
+  APP_CONFIG.CLEANING_CHECKS.forEach(function(c){data[c.key]=window['_toggle_'+c.key]||'No';});
+  _showLoader('Submitting...');
+  _gas('addCleaning',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('Cleaning submitted! '+r.pct+'% complete ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ── MY FUEL ───────────────────────────────────────────────────────────────────
+function _vMyFuel(){
+  var fuel=_D.myFuel||[];
+  var myVeh=(_D.myVehicle||[])[0];
+  var html=_ph('Fuel Entry','');
+  html+='<div class="form-card" style="margin-bottom:16px">'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:14px"><i class="fas fa-gas-pump" style="color:var(--O)"></i> Add Fuel Entry</div>'+
+    (myVeh?'<div style="font-size:12px;color:var(--tx3);margin-bottom:12px;padding:8px 12px;background:var(--sur2);border-radius:8px">Vehicle: <b>'+_esc(myVeh.VehicleNo)+'</b> &nbsp;·&nbsp; Last KM: <b>'+Number(myVeh.CurrentKM||0).toLocaleString('en-IN')+'</b></div>':'')+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="mf-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Current KM</label><input type="number" id="mf-km" placeholder="Odometer reading" oninput="_fuelCalcMy()"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Fuel Qty (L) *</label><input type="number" id="mf-qty" placeholder="e.g. 30" step="0.1" oninput="_fuelCalcMy()"></div>'+
+    '<div class="fgrp"><label>Amount (₹) *</label><input type="number" id="mf-amt" placeholder="e.g. 3000" oninput="_fuelCalcMy()"></div></div>'+
+    '<div id="mf-calc" class="calc-preview" style="display:none"></div>'+
+    '<div class="fgrp"><label>Pump Name</label><input id="mf-pump" placeholder="e.g. HPCL Rohini"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px;background:var(--O)" onclick="submitMyFuel()"><i class="fas fa-gas-pump"></i> Submit</button></div>';
+
+  if(fuel.length){
+    html+='<div class="sec-hdr">My Fuel History</div>';
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Qty</th><th>Amt</th><th>Mileage</th></tr></thead><tbody>';
+    fuel.slice().reverse().slice(0,20).forEach(function(f){
+      var m=parseFloat(f.Mileage||0);var col=m>0&&m<6?'color:var(--R);font-weight:800':m>=12?'color:var(--G)':'';
+      html+='<tr><td>'+_fmtDate(f.Date)+'</td><td>'+_esc(f.FuelQty)+'L</td><td>'+_inr(f.Amount)+'</td><td style="'+col+'">'+(m>0?m+'kmpl':'—')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+  return html;
+}
+function _fuelCalcMy(){
+  var qty=parseFloat(document.getElementById('mf-qty').value||0);
+  var amt=parseFloat(document.getElementById('mf-amt').value||0);
+  var km=parseFloat(document.getElementById('mf-km').value||0);
+  var myVeh=(_D.myVehicle||[])[0];var prev=myVeh?Number(myVeh.CurrentKM||0):0;
+  var el=document.getElementById('mf-calc');if(!el)return;
+  if(qty<=0&&amt<=0){el.style.display='none';return;}
+  var rate=qty>0&&amt>0?(amt/qty).toFixed(2):0;
+  var dist=km>prev&&prev>0?km-prev:0;var mil=qty>0&&dist>0?(dist/qty).toFixed(1):0;
+  var mCol=mil>0&&mil<6?'color:var(--R);font-weight:800':mil>=12?'color:var(--G);font-weight:700':'';
+  el.style.display='flex';
+  el.innerHTML='⛽ Rate: <b>₹'+rate+'/L</b>'+(dist>0?' | Dist: <b>'+dist+'km</b>':'')+(mil>0?' | Mileage: <b style="'+mCol+'">'+mil+'km/L</b>':'');
+}
+function submitMyFuel(){
+  var myVeh=(_D.myVehicle||[])[0];
+  if(!myVeh){_toast('No vehicle assigned','err');return;}
+  var qty=document.getElementById('mf-qty').value;var amt=document.getElementById('mf-amt').value;
+  if(!qty||!amt){_toast('Qty aur amount zaroori hain','warn');return;}
+  var data={vehicleID:myVeh.VehicleID,date:document.getElementById('mf-date').value,
+    kmReading:document.getElementById('mf-km').value||0,previousKM:Number(myVeh.CurrentKM||0),
+    fuelQty:qty,amount:amt,pumpName:document.getElementById('mf-pump').value.trim()};
+  _showLoader('Submitting...');
+  _gas('addFuel',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('Fuel entry done! '+r.mileage+' km/L ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ── MY TRIPS / EXPENSES / KM LOGS ─────────────────────────────────────────────
+function _vMyTrips(){
+  var trips=_D.myTrips||[];
+  var myVeh=(_D.myVehicle||[])[0];
+  var html=_ph('My Trips','');
+  html+='<div class="form-card" style="margin-bottom:16px">'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:12px"><i class="fas fa-route" style="color:var(--B)"></i> Log New Trip</div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>From *</label><input id="mt-from" placeholder="e.g. ISE Depot Rohini"></div>'+
+    '<div class="fgrp"><label>To *</label><input id="mt-to" placeholder="e.g. Bhiwadi Plant"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Start KM</label><input type="number" id="mt-skm" placeholder="0"></div>'+
+    '<div class="fgrp"><label>End KM</label><input type="number" id="mt-ekm" placeholder="0"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Material</label><select id="mt-mat"><option value="">—</option>'+APP_CONFIG.MATERIAL_TYPES.map(function(m){return'<option>'+m+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Weight (MT)</label><input type="number" id="mt-wt" step="0.1" placeholder="0.0"></div></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px;background:var(--B)" onclick="submitMyTrip()"><i class="fas fa-route"></i> Log Trip</button></div>';
+  if(trips.length){
+    html+='<div class="sec-hdr">My Trips</div>';
+    html+='<div style="display:flex;flex-direction:column;gap:8px">';
+    trips.slice().reverse().slice(0,15).forEach(function(t){
+      html+='<div class="list-card" style="cursor:default">'+
+        '<div class="lc-row"><b>'+_esc(t.FromLocation||'')+'</b><i class="fas fa-arrow-right" style="color:var(--tx3)"></i><b>'+_esc(t.ToLocation||'')+'</b></div>'+
+        '<div class="lc-meta"><i class="fas fa-calendar"></i>'+_fmtDate(t.Date)+' &nbsp;·&nbsp; '+_esc(t.MaterialType||'—')+' &nbsp;·&nbsp; <b>'+Number(t.TotalKM||0)+' km</b></div></div>';
+    });
+    html+='</div>';
+  }
+  return html;
+}
+function submitMyTrip(){
+  var myVeh=(_D.myVehicle||[])[0];
+  var from=document.getElementById('mt-from').value.trim();
+  var to=document.getElementById('mt-to').value.trim();
+  if(!from||!to){_toast('From aur To zaroori hain','warn');return;}
+  var data={vehicleID:myVeh?myVeh.VehicleID:'',date:_today(),fromLocation:from,toLocation:to,
+    startKM:document.getElementById('mt-skm').value||0,endKM:document.getElementById('mt-ekm').value||0,
+    materialType:document.getElementById('mt-mat').value,weight:document.getElementById('mt-wt').value||0};
+  _showLoader('Logging...');
+  _gas('addTrip',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('Trip logged! '+r.totalKM+' km ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _vMyExpenses(){
+  var exp=_D.myExpenses||[];
+  var myVeh=(_D.myVehicle||[])[0];
+  var html=_ph('My Expenses','');
+  html+='<div class="form-card" style="margin-bottom:16px">'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:12px"><i class="fas fa-receipt" style="color:var(--R)"></i> Add Expense</div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Type *</label><select id="me-type"><option value="">Select</option>'+APP_CONFIG.EXPENSE_TYPES.map(function(t){return'<option>'+t+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Amount (₹) *</label><input type="number" id="me-amt" placeholder="0"></div></div>'+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Payment Mode</label><select id="me-mode">'+APP_CONFIG.PAYMENT_MODES.map(function(m){return'<option>'+m+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="me-date" value="'+_today()+'"></div></div>'+
+    '<div class="fgrp"><label>Remarks</label><input id="me-rem" placeholder="Optional"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px;background:var(--R)" onclick="submitMyExpense()"><i class="fas fa-plus"></i> Add Expense</button></div>';
+  if(exp.length){
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Mode</th></tr></thead><tbody>';
+    exp.slice().reverse().slice(0,20).forEach(function(e){
+      html+='<tr><td>'+_fmtDate(e.Date)+'</td><td>'+_esc(e.ExpenseType)+'</td><td><b>'+_inr(e.Amount)+'</b></td><td>'+_esc(e.PaymentMode||'—')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+  return html;
+}
+function submitMyExpense(){
+  var myVeh=(_D.myVehicle||[])[0];
+  var type=document.getElementById('me-type').value;
+  var amt=document.getElementById('me-amt').value;
+  if(!type||!amt){_toast('Type aur amount zaroori hain','warn');return;}
+  var data={vehicleID:myVeh?myVeh.VehicleID:'',date:document.getElementById('me-date').value,
+    expenseType:type,amount:amt,paymentMode:document.getElementById('me-mode').value,
+    remarks:document.getElementById('me-rem').value.trim()};
+  _showLoader('Adding...');
+  _gas('addExpense',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('Expense added ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+function _vMyKMLogs(){
+  var logs=_D.myKMLogs||[];
+  var myVeh=(_D.myVehicle||[])[0];
+  var html=_ph('KM Log','');
+  html+='<div class="form-card" style="margin-bottom:16px">'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:12px"><i class="fas fa-gauge-high" style="color:var(--V)"></i> Add KM Reading</div>'+
+    (myVeh?'<div style="font-size:12px;color:var(--tx3);padding:8px 12px;background:var(--sur2);border-radius:8px;margin-bottom:12px">Last: <b>'+Number(myVeh.CurrentKM||0).toLocaleString('en-IN')+' km</b></div>':'')+
+    '<div class="fgrp-row">'+
+    '<div class="fgrp"><label>Date</label><input type="date" id="mkl-date" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Odometer *</label><input type="number" id="mkl-od" placeholder="Current reading"></div></div>'+
+    '<div class="fgrp"><label>Remarks</label><input id="mkl-rem" placeholder="e.g. Morning reading"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px;background:var(--V)" onclick="submitMyKMLog()"><i class="fas fa-plus"></i> Add Reading</button></div>';
+  if(logs.length){
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Odometer</th><th>Remarks</th></tr></thead><tbody>';
+    logs.slice().reverse().forEach(function(l){
+      html+='<tr><td>'+_fmtDate(l.Date)+'</td><td><b>'+Number(l.OdometerReading||0).toLocaleString('en-IN')+' km</b></td><td>'+_esc(l.Remarks||'—')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
+  return html;
+}
+function submitMyKMLog(){
+  var myVeh=(_D.myVehicle||[])[0];
+  var od=document.getElementById('mkl-od').value;
+  if(!od){_toast('Odometer reading daalo','warn');return;}
+  var data={vehicleID:myVeh?myVeh.VehicleID:'',date:document.getElementById('mkl-date').value,odometer:od,remarks:document.getElementById('mkl-rem').value.trim()};
+  _showLoader('Adding...');
+  _gas('addKMLog',[data],function(r){
+    _hideLoader();if(r&&r.success){_toast('KM log added ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
+
+// ── PROFILE ────────────────────────────────────────────────────────────────────
+function _vProfile(){
+  if(!_U)return'';
+  var col=_avatarColor(_U.name||'');
+  var lb=_D.leaveBalance||{};
+  var html='<div class="settings-profile">'+
+    '<div class="sp-avatar" style="background:rgba(255,255,255,.2)">'+_initials(_U.name||'')+'</div>'+
+    '<div><div class="sp-name">'+_esc(_U.name)+'</div>'+
+    '<div class="sp-email">'+_esc(_U.email)+'</div>'+
+    '<div style="margin-top:6px;font-size:12px;opacity:.8">'+_esc(_U.mobile||'')+'</div></div></div>';
+
+  var myDrv=(_D.myDriver||[])[0]||{};
+  html+='<div class="detail-grid">'+
+    _dr('Driver ID',myDrv.DriverID||'—')+_dr('Blood Group',myDrv.BloodGroup||'—')+
+    _dr('Joining Date',_fmtDate(myDrv.JoiningDate))+_dr('License',myDrv.LicenseNo||'—')+
+    _dr('License Expiry',_fmtDate(myDrv.LicenseExpiry))+_dr('Week Off',myDrv.WeekOffDay||'Sunday')+
+    '</div>';
+
+  html+='<div class="sec-hdr">Leave Balance</div>'+
+    '<div class="leave-balance">'+
+    '<div class="lb-item"><div class="lb-num lb-cl">'+lb.casual_leave+'</div><div class="lb-lbl">Casual</div></div>'+
+    '<div class="lb-item"><div class="lb-num lb-sl">'+lb.sick_leave+'</div><div class="lb-lbl">Sick</div></div>'+
+    '<div class="lb-item"><div class="lb-num lb-pl">'+lb.paid_leave+'</div><div class="lb-lbl">Paid</div></div></div>';
+
+  html+='<div class="settings-list">'+
+    '<div class="setting-row" onclick="_changePassword()"><div class="sr-icon"><i class="fas fa-lock"></i></div><div class="sr-label">Change Password</div><i class="fas fa-chevron-right sr-arrow"></i></div>'+
+    '<div class="setting-row" onclick="toggleDark()"><div class="sr-icon"><i class="fas fa-moon"></i></div><div class="sr-label">Dark Mode</div></div></div>';
+
+  html+='<button class="btn btn-wide btn-danger" style="margin-top:20px" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i> Logout</button>';
+  return html;
+}
+
+// ── MN ref for date helpers ──
+var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];

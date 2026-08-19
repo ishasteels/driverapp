@@ -1,11 +1,11 @@
 {
   "name": "ISE Driver App — Isha Steels",
   "short_name": "ISE Vehicles",
-  "description": "Isha Steels Enterprises Vehicle Operations Management",
-  "start_url": "./",
+  "description": "Isha Steels Enterprises Vehicle Operations Management System",
+  "start_url": "./index.html?pwa=1",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "portrait-primary",
   "background_color": "#D51515",
   "theme_color": "#D51515",
   "lang": "hi-IN",
@@ -21,18 +21,44 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    },
+    {
+      "src": "icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "apple-touch-icon"
     }
   ],
   "shortcuts": [
     {
       "name": "Dashboard",
-      "url": "./?view=dashboard",
-      "description": "Main dashboard"
+      "short_name": "Dashboard",
+      "url": "./index.html?v=dashboard",
+      "description": "Main dashboard",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Fuel Entry",
-      "url": "./?view=fuel",
-      "description": "Add fuel entry"
+      "short_name": "Fuel",
+      "url": "./index.html?v=fuel",
+      "description": "Add fuel entry",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Attendance",
+      "short_name": "Attendance",
+      "url": "./index.html?v=attendance",
+      "description": "Mark attendance",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshot-mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "ISE Driver App Home Screen"
     }
   ],
   "categories": ["business", "productivity"],

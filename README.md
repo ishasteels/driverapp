@@ -1,189 +1,184 @@
-# 🚗 ISE Driver App
+# 🚗 ISE Driver App v3.0
 ### Isha Steels Enterprises — Vehicle Operations Management System
 
 **Stack:** Google Apps Script (backend) + GitHub Pages (frontend PWA)  
-**Sheet:** [ISE Driver App Google Sheet](https://docs.google.com/spreadsheets/d/1evuqEoFjzLmERGFBN8PJen9qSWiSsxgWoJi6kvmvFk0/)  
-**Live App:** https://ishasteels.github.io/driverapp
+**Sheet:** [ISE Driver App Google Sheet](https://docs.google.com/spreadsheets/d/1T7ujy6Wtcm1F2l_vgb2KhvRGYpEUl7cdbl-G2cE17sY/)  
+**Live App:** https://ishasteels.github.io/driverapp  
+**Built by:** [Autoworkflow](https://autoworkflow.in) — sales@autoworkflow.in
 
 ---
 
-## Files in This Repo
+## 📁 Files
 
 | File | Purpose |
 |------|---------|
-| `index.html` | Full app UI + CSS |
-| `appconfig.js` | Config: GAS URL, colors, role-permissions |
-| `app.js` | All JavaScript, views, API calls |
-| `Code.gs` | Google Apps Script backend (paste to GAS) |
-| `manifest.json` | PWA: standalone install, icons |
-| `sw.js` | Service Worker: offline shell caching |
-| `icon-180.png` | Apple Touch Icon (already placed) |
-| `icon-192.png` | Android icon (generate, see below) |
-| `icon-512.png` | Large icon (generate, see below) |
+| `index.html` | Full app UI + CSS (1393 lines) |
+| `appconfig.js` | GAS URL, colors, role permissions, module config |
+| `app.js` | All JS — views, API calls, CRUD (2900+ lines) |
+| `Code.gs` | Google Apps Script backend (paste to GAS editor) |
+| `manifest.json` | PWA manifest — standalone install |
+| `sw.js` | Service Worker — offline shell caching |
+| `icon-192.png` | Android PWA icon |
+| `icon-512.png` | Large PWA icon |
+| `icon-180.png` | iPhone touch icon |
 
 ---
 
-## 🚀 Step-by-Step Deployment
+## 🚀 Deployment
 
-### Step 1: Google Apps Script Setup
+### Step 1 — Google Sheet Setup
+Sheet ID: `1T7ujy6Wtcm1F2l_vgb2KhvRGYpEUl7cdbl-G2cE17sY`
 
-1. Open your Google Sheet:  
-   `https://docs.google.com/spreadsheets/d/1evuqEoFjzLmERGFBN8PJen9qSWiSsxgWoJi6kvmvFk0/`
+Make sure all 32 tabs exist:
+`Users, Vehicles, Drivers, DriverAttendance, VehicleInspection, VehicleCleaning, FuelEntries, VehicleServices, ServiceReturnChecklist, VehicleDocuments, Reminders, Notifications, NotificationQueue, VehicleTrip, VehicleExpense, DriverPenalty, DriverReward, VehicleKMLog, MaintenanceSchedule, FastagTransactions, DispatchTrips, AuditLogs, VehicleAssignmentHistory, AppConfig, HolidayList, LeaveRequests, TaskList, Checklist, Checklist_Today, Delegation, Announcements, Payroll`
 
-2. **Extensions → Apps Script**
+### Step 2 — Google Apps Script
+1. Open Sheet → **Extensions → Apps Script**
+2. Delete default code → paste full `Code.gs`
+3. Save (Ctrl+S)
 
-3. Delete the default `myFunction()` and paste the full contents of `Code.gs`
+### Step 3 — Script Properties (WhatsApp credentials)
+Apps Script → Project Settings (⚙️) → Script Properties → Add:
+```
+WA_API_KEY  = your-messageautosender-api-key
+WA_AUTH     = your-basic-auth-value
+```
 
-4. Line 4: Update SHEET_ID:
-   ```javascript
-   var SHEET_ID = '1evuqEoFjzLmERGFBN8PJen9qSWiSsxgWoJi6kvmvFk0';
-   ```
+### Step 4 — Deploy as Web App
+1. Deploy → New Deployment
+2. Type: **Web app**
+3. Execute as: **Me**
+4. Who has access: **Anyone**
+5. Deploy → Copy the URL
 
-5. **Deploy → New Deployment**
-   - Type: **Web app**
-   - Execute as: **Me**
-   - Who has access: **Anyone**
-   - Click **Deploy** → Copy the URL
-
-### Step 2: Update appconfig.js
-
-Open `appconfig.js` and update line 13:
+### Step 5 — Update appconfig.js
 ```javascript
-GAS_URL: 'https://script.google.com/macros/s/AKfycbx.../exec',
-```
-Replace with your actual deployment URL from Step 1.
-
-### Step 3: Generate Icons
-
-Icons 192 and 512 nahi hain abhi. Use any of these:
-
-**Option A — Online:**  
-https://favicon.io/ → Upload your icon-180.png → Download 192x192 and 512x512
-
-**Option B — Python (agar PIL installed ho):**
-```python
-from PIL import Image
-
-img = Image.open('icon-180.png')
-img.resize((192, 192)).save('icon-192.png')
-img.resize((512, 512)).save('icon-512.png')
+GAS_URL: 'https://script.google.com/macros/s/YOUR_NEW_URL/exec',
 ```
 
-### Step 4: Push to GitHub
+### Step 6 — Setup Triggers (run once)
+In Apps Script editor, run `runFullSetup()` function once.
 
+This sets:
+- `sendDailyReminders` → 8 AM daily (vehicle alerts + celebrations)
+- `refreshChecklistToday` → Sunday 11 PM (weekly checklist refresh)
+
+### Step 7 — Push to GitHub
 ```bash
-# First time (agar local pe hai)
-git init
 git add .
-git commit -m "Initial ISE Driver App"
-git remote add origin https://github.com/ishasteels/driverapp.git
-git push -u origin main
+git commit -m "ISE Driver App v3.0"
+git push origin main
 ```
 
-**Ya GitHub UI se:**
-1. Go to: https://github.com/ishasteels/driverapp
-2. Upload all files (drag & drop)
-3. Commit changes
-
-### Step 5: Enable GitHub Pages
-
-1. Repo → **Settings → Pages**
-2. Source: **Deploy from a branch**
-3. Branch: **main** → Folder: **/ (root)**
-4. Save
-5. Wait 2 min → Visit: https://ishasteels.github.io/driverapp
-
-### Step 6: Set GAS Triggers (for daily reminders)
-
-In Apps Script:
-1. Left panel → **Triggers (⏰)**
-2. **+ Add Trigger**
-   - Function: `sendDailyReminders`
-   - Event source: **Time-driven**
-   - Type: **Day timer**
-   - Time: **8 AM to 9 AM**
-3. Save
+### Step 8 — Enable GitHub Pages
+Repo Settings → Pages → Branch: main → / (root) → Save  
+Wait ~2 min → https://ishasteels.github.io/driverapp
 
 ---
 
-## 👥 Roles & Permissions
+## 👥 Roles
 
 | Role | Access |
 |------|--------|
-| **Admin** | Everything: all vehicles, drivers, fuel, audit log, user management |
-| **Manager** | All operational data, no users/audit |
-| **Driver** | Only their own: attendance, inspection, cleaning, fuel, trips, expenses |
+| **Admin** | Everything — all modules, users, audit log, payroll |
+| **Manager** | All operational data, no users/payroll/audit |
+| **Driver** | Only own data — attendance, inspection, cleaning, fuel, trips, expenses, checklist, tasks, leave |
 
 ---
 
-## 🗃️ Google Sheet Tabs (all must exist)
+## 🗃️ New Modules (v3.0)
 
-| Tab | Purpose |
-|-----|---------|
-| Users | Login credentials + roles |
-| Vehicles | Vehicle master |
-| Drivers | Driver master |
-| DriverAttendance | Daily attendance |
-| VehicleInspection | Pre-trip checklist |
-| VehicleCleaning | Cleaning log |
-| FuelEntries | Fuel records |
-| VehicleServices | Service history |
-| ServiceReturnChecklist | Post-service checklist |
-| VehicleDocuments | Insurance, PUC, RC etc |
-| Reminders | Expiry alerts |
-| Notifications | App notifications |
-| VehicleTrip | Trip log |
-| VehicleExpense | Expense records |
-| DriverPenalty | Penalty records |
-| DriverReward | Reward records |
-| VehicleKMLog | Odometer log |
-| MaintenanceSchedule | Maintenance calendar |
-| FastagTransactions | Fastag recharge log |
-| DispatchTrips | Dispatch records |
-| AuditLogs | All actions log |
-| VehicleAssignmentHistory | Driver-vehicle assignments |
-| NotificationQueue | WhatsApp/Email queue |
-| Settings | App settings |
+### ✅ Checklist
+- Admin sets up recurring tasks (Daily/Weekly/Monthly/One-time)
+- **Shared tasks** — multiple drivers see same task; first to tap "Claim" gets credit
+- `PropertiesService` mutex lock prevents double-claim race condition
+- `Checklist_Today` sheet for fast read (no 41K row scan)
+- Daily trigger auto-refreshes today's tasks
+
+### 📌 Delegation
+- Admin/Manager assigns one-off tasks to drivers
+- Driver can request date revision (max 2 times)
+- WA alert on assign + on completion
+- Overdue tracking with visual indicators
+
+### 🗓️ Leave Management
+- Driver applies for CL/SL/PL/LWP
+- Manager approves/rejects from app
+- Leave balance tracked from Drivers sheet
+- WA notification both ways
+
+### 📅 Holiday Calendar
+- Admin manages holiday list
+- Shows upcoming 5 holidays on dashboard
+- Attendance system respects holidays
+- Payroll skips holidays in working day calc
+
+### 📢 Announcements
+- Admin/Manager posts company announcements
+- Priority: Normal / High / Urgent
+- Visible to all roles on dashboard
+
+### 💰 Payroll (Admin only)
+- Auto-calculates monthly salary per driver
+- Deducts LWP/absent days
+- Considers approved leaves
+- CSV export for accountant
+
+### 📊 Analytics
+- Fuel spend trend (line chart)
+- Expense by type (doughnut)
+- Mileage by vehicle (bar chart)
+- Attendance % by driver (bar chart)
+- Date range filter
+
+### 🎂 Celebrations
+- Auto-detects birthdays + work anniversaries
+- Banner on dashboard
+- WA wish sent at 8 AM via daily trigger
 
 ---
 
-## 📱 Install as App on Phone
+## 📱 Install as App
 
 **Android (Chrome):**
 1. Open: https://ishasteels.github.io/driverapp
-2. Chrome menu (⋮) → **Add to Home Screen**
+2. Chrome menu ⋮ → Add to Home Screen
 3. Opens as standalone app — no browser bar
 
 **iPhone (Safari):**
-1. Open URL in Safari
-2. Share button (□↑) → **Add to Home Screen**
+1. Open URL in Safari (not Chrome)
+2. Share button → Add to Home Screen
 
 ---
 
-## 🔧 Updating the App
+## 🔧 Update Process
 
-### If only frontend changed (index.html / app.js / appconfig.js):
-Just push to GitHub. Changes live in 1-2 min.
+### Frontend only (index.html / app.js / appconfig.js):
+Just push to GitHub. Live in 1-2 min.
 
-### If Code.gs changed:
-1. Apps Script → Deploy → **Manage Deployments**
-2. Edit → Version: **New Version** → Deploy
-3. URL stays same — no need to update appconfig.js
+### Code.gs changed:
+1. Apps Script → Deploy → Manage Deployments
+2. Edit → Version: New Version → Deploy
+3. URL stays same — no appconfig.js update needed
 
 ---
 
-## 🐛 Common Issues
+## 🐛 Troubleshooting
 
-| Problem | Cause | Fix |
-|---------|-------|-----|
-| Login spins forever | GAS URL wrong in appconfig.js | Check GAS_URL, redeploy GAS |
-| "Email nahi mila" | Wrong SHEET_ID in Code.gs | Fix SHEET_ID, new version |
-| App not installable | Missing icon-192 or icon-512 | Generate and upload icons |
-| Data doesn't refresh | GAS quota hit | Wait 1-2 min, try again |
-| Chrome badge on icon | Installed as shortcut not PWA | Delete → Clear cache → Re-add |
+| Problem | Fix |
+|---------|-----|
+| Login spins forever | Check GAS_URL in appconfig.js, redeploy GAS |
+| "Session expire" on every action | New deployment needed — update GAS_URL |
+| Checklist empty | Run `generateChecklist` or wait for Sunday trigger |
+| GPS block not working | Check DEPOT_LAT/LNG in AppConfig sheet |
+| WA not sending | Check WA_API_KEY and WA_AUTH in Script Properties |
+| Dark mode not saving | localStorage must be enabled in browser |
+| Charts not loading | CDN cdn.jsdelivr.net blocked — check network |
 
 ---
 
 ## 📞 Support
-AUTOOWORKFLOW — sales@autoworkflow.in  
-+91 9953333492
+**Autoworkflow** — India's Leading Google Workspace Automation Partner  
+📧 sales@autoworkflow.in  
+📱 +91 9953333492  
+🌐 autoworkflow.in

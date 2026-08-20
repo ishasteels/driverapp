@@ -5,7 +5,7 @@
 window.APP_CONFIG = {
 
   // ── GAS Web App URL ────────────────────────────────────────────────────
-  GAS_URL: 'https://script.google.com/macros/s/AKfycbwgPa0S_kN7QzCeW5TA15dUzPxGfK7PSEgXGTsaJs-kyp71jn-uFXwAOeKajqKvP2PCtA/exec',
+  GAS_URL: 'https://script.google.com/macros/s/AKfycbxQvMas07jHdG4kp2FjYspnLx5MBQWUFOoNNmnfahK1QFtFN77Foad5AnNHRA22kQheWQ/exec',
 
   // ── App Info ────────────────────────────────────────────────────────────
   APP_NAME:    'ISE Driver App',

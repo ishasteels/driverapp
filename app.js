@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════════════
-// app.js — ISE Driver App v3.0
-// Core: session, GAS bridge, date utils, CSV download
-// Load order: appconfig.js → app.js → index.html inline script
+// app.js — ISE Driver App v3.1
+// SPEED: localStorage cache layer + lazy loading + optimistic UI
+// RESPONSIVE: mobile/tablet/desktop breakpoints
 // ════════════════════════════════════════════════════════════════════════════
 (function(W){
 'use strict';
@@ -10,14 +10,14 @@ var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 var DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 var CFG=W.APP_CONFIG||{};
 
-// ── Date helpers ─────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// DATE HELPERS
+// ════════════════════════════════════════════════════════════════════════════
 W._today=function(){return new Date().toISOString().slice(0,10);};
 W._currMonth=function(){return new Date().toISOString().slice(0,7);};
 W._daysAgo=function(n){var d=new Date();d.setDate(d.getDate()-n);return d.toISOString().slice(0,10);};
-
 W._parseAnyDate=function(s){
-  if(!s)return null;
-  var str=String(s).trim();
+  if(!s)return null;var str=String(s).trim();
   if(!str||str==='-'||str==='undefined'||str==='null')return null;
   var gm=str.match(/([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
   if(gm){var mo={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
@@ -27,7 +27,6 @@ W._parseAnyDate=function(s){
   var norm=str.length===10?str+'T00:00:00':str.replace(' ','T');
   var d3=new Date(norm);return isNaN(d3)?null:d3;
 };
-
 W._fmtDate=function(s){
   if(!s||s==='-')return'—';
   try{var d=W._parseAnyDate(s);if(!d)return String(s).slice(0,10);
@@ -36,7 +35,7 @@ W._fmtDate=function(s){
 W._fmtDateTime=function(s){
   if(!s||s==='-')return'—';
   try{var d=W._parseAnyDate(s);if(!d)return String(s).slice(0,16);
-    var h=d.getHours(),m=d.getMinutes();var ap=h>=12?'PM':'AM',h12=h%12||12;
+    var h=d.getHours(),m=d.getMinutes(),ap=h>=12?'PM':'AM',h12=h%12||12;
     return d.getDate()+' '+MN[d.getMonth()]+' '+d.getFullYear()+' '+h12+':'+(m<10?'0':'')+m+' '+ap;}catch(e){return s;}
 };
 W._fmtTime=function(s){
@@ -53,11 +52,12 @@ W._dayName=function(dateStr){
   try{return new Date(dateStr+'T00:00:00').toLocaleDateString('en-IN',{weekday:'long'});}catch(e){return'';}
 };
 
-// ── String helpers ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// STRING HELPERS
+// ════════════════════════════════════════════════════════════════════════════
 W._esc=function(s){
   if(s===null||s===undefined)return'';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 };
 W._commaNum=function(n){return(+n||0).toLocaleString('en-IN');};
 W._inr=function(n){return'₹'+W._commaNum(n);};
@@ -66,19 +66,57 @@ W._initials=function(name){
   return p.length>=2?p[0][0].toUpperCase()+p[1][0].toUpperCase():(p[0]||'?')[0].toUpperCase();
 };
 W._avatarColor=function(name){
-  var colors=['#D51515','#2980B9','#8E44AD','#27AE60','#E67E22','#0D9488','#E74C3C','#16A085'];
+  var colors=['#1A73E8','#EA4335','#34A853','#FBBC04','#8E44AD','#0D9488','#E67E22','#1557B0'];
   var i=String(name||'').split('').reduce(function(a,c){return a+c.charCodeAt(0);},0);
   return colors[i%colors.length];
 };
 
-// ── Session ───────────────────────────────────────────────────────────────────
-var SK=(CFG.SESSION_KEY)||'ise_session_v3';
-var SH=(CFG.SESSION_HOURS)||12;
-W._saveSession=function(u,t){try{localStorage.setItem(SK,JSON.stringify({user:u,token:t,exp:Date.now()+SH*3600000}));}catch(e){}};
+// ════════════════════════════════════════════════════════════════════════════
+// SESSION
+// ════════════════════════════════════════════════════════════════════════════
+var SK=CFG.SESSION_KEY||'ise_session_v3';
+var SH=CFG.SESSION_HOURS||12;
+W._saveSession=function(u){try{localStorage.setItem(SK,JSON.stringify({user:u,exp:Date.now()+SH*3600000}));}catch(e){}};
 W._loadSession=function(){try{var r=localStorage.getItem(SK);if(!r)return null;var s=JSON.parse(r);return(s&&s.user&&Date.now()<(s.exp||0))?s:null;}catch(e){return null;}};
 W._clearSession=function(){try{localStorage.removeItem(SK);}catch(e){}};
 
-// ── GAS JSONP Bridge ──────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// ═══════════════ LOCALCACHE — Speed layer ════════════════════════════════
+// First load: GAS fetch → save to localStorage
+// Repeat visit: serve from localStorage (< 5ms) → background refresh
+// TTL: 5 minutes default
+// ════════════════════════════════════════════════════════════════════════════
+var LC_PREFIX='ise_lc_v3_';
+var LC_TTL_MS=5*60*1000; // 5 minutes
+
+W._lcGet=function(key){
+  try{
+    var raw=localStorage.getItem(LC_PREFIX+key);
+    if(!raw)return null;
+    var obj=JSON.parse(raw);
+    if(!obj||Date.now()>obj.exp)return null; // expired
+    return obj.data;
+  }catch(e){return null;}
+};
+W._lcSet=function(key,data,ttlMs){
+  try{
+    var str=JSON.stringify({data:data,exp:Date.now()+(ttlMs||LC_TTL_MS)});
+    if(str.length<4*1024*1024) // 4MB max
+      localStorage.setItem(LC_PREFIX+key,str);
+  }catch(e){
+    // localStorage full — clear old ISE cache entries
+    try{
+      Object.keys(localStorage).filter(function(k){return k.startsWith(LC_PREFIX);}).forEach(function(k){localStorage.removeItem(k);});
+      localStorage.setItem(LC_PREFIX+key,JSON.stringify({data:data,exp:Date.now()+(ttlMs||LC_TTL_MS)}));
+    }catch(e2){}
+  }
+};
+W._lcClear=function(key){try{localStorage.removeItem(LC_PREFIX+(key||''));if(!key){Object.keys(localStorage).filter(function(k){return k.startsWith(LC_PREFIX);}).forEach(function(k){localStorage.removeItem(k);});}}catch(e){}};
+W._lcClearAll=function(){W._lcClear();};
+
+// ════════════════════════════════════════════════════════════════════════════
+// GAS JSONP BRIDGE — with localStorage speed layer
+// ════════════════════════════════════════════════════════════════════════════
 W._gas=function(fn,args,onOk,onErr,_retry){
   if(typeof W._lbShow==='function')W._lbShow();
   var GU=W.GAS_URL||(CFG.GAS_URL)||'';
@@ -92,17 +130,17 @@ W._gas=function(fn,args,onOk,onErr,_retry){
     if(done)return;done=true;
     if(typeof W._lbHide==='function')W._lbHide();
     sc.remove();delete W[cb];
-    if(rt<1){setTimeout(function(){W._gas(fn,args,onOk,onErr,1);},1500);return;}
+    if(rt<1){setTimeout(function(){W._gas(fn,args,onOk,onErr,1);},2000);return;}
     if(onErr)onErr({message:'Network error. Check connection.'});
-    else if(typeof W._toast==='function')W._toast('Connection error — please retry','err');
+    else if(typeof W._toast==='function')W._toast('Connection error — tap to retry','err');
   },CFG.DEFAULT_TIMEOUT||30000);
   W[cb]=function(data){
     if(done)return;done=true;
     if(typeof W._lbHide==='function')W._lbHide();
     clearTimeout(tm);sc.remove();delete W[cb];
     if(data&&data.success===false&&data.error){
-      if(data.error.indexOf('Session expire')>=0||data.error.indexOf('login')>=0){
-        W._clearSession();location.reload();return;
+      if(data.error.indexOf('Session expire')>=0||data.error.indexOf('NOT_AUTH')>=0){
+        W._clearSession();W._lcClearAll();location.reload();return;
       }
       if(onErr)onErr({message:data.error});
       else if(typeof W._toast==='function')W._toast('Error: '+data.error,'err');
@@ -113,35 +151,28 @@ W._gas=function(fn,args,onOk,onErr,_retry){
   sc.src=url;document.head.appendChild(sc);
 };
 
-// Login (no session arg needed)
+// Login (no session attached)
 W._gasLogin=function(email,pass,onOk,onErr){
   var GU=W.GAS_URL||(CFG.GAS_URL)||'';
   var cb='_cb'+Date.now()+Math.floor(Math.random()*9999);
   var pl=encodeURIComponent(JSON.stringify({action:'login',args:[email,pass]}));
   var url=GU+'?callback='+cb+'&payload='+pl;
   var done=false,sc=document.createElement('script');
-  var tm=setTimeout(function(){
-    if(done)return;done=true;sc.remove();delete W[cb];
-    if(onErr)onErr({message:'Server timeout. Check connection.'});
-  },30000);
-  W[cb]=function(data){
-    if(done)return;done=true;clearTimeout(tm);sc.remove();delete W[cb];
-    if(data&&data.success===false&&data.error){if(onErr)onErr({message:data.error});}
-    else{if(onOk)onOk(data);}
-  };
-  sc.onerror=function(){if(done)return;done=true;clearTimeout(tm);sc.remove();delete W[cb];
-    if(onErr)onErr({message:'Network error.'});};
+  var tm=setTimeout(function(){if(done)return;done=true;sc.remove();delete W[cb];if(onErr)onErr({message:'Server timeout.'});},30000);
+  W[cb]=function(data){if(done)return;done=true;clearTimeout(tm);sc.remove();delete W[cb];
+    if(data&&data.success===false&&data.error){if(onErr)onErr({message:data.error});}else{if(onOk)onOk(data);}};
+  sc.onerror=function(){if(done)return;done=true;clearTimeout(tm);sc.remove();delete W[cb];if(onErr)onErr({message:'Network error.'});};
   sc.src=url;document.head.appendChild(sc);
 };
 
-// ── CSV Download ──────────────────────────────────────────────────────────────
+// CSV Download
 W._downloadCSV=function(filename,rows){
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c===null||c===undefined?'':c).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
   var a=document.createElement('a');a.href='data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(csv);
   a.download=filename;a.style.display='none';document.body.appendChild(a);a.click();document.body.removeChild(a);
 };
 
-// ── Geo ───────────────────────────────────────────────────────────────────────
+// GPS
 W._getGPS=function(onOk,onErr){
   if(!navigator.geolocation){if(onErr)onErr('GPS not supported');return;}
   navigator.geolocation.getCurrentPosition(
@@ -154,23 +185,26 @@ W._getGPS=function(onOk,onErr){
 })(window);
 
 // ════════════════════════════════════════════════════════════════════════════
-// APP STATE + LOGIN + ROUTING
+// APP STATE
 // ════════════════════════════════════════════════════════════════════════════
-var _U=null;       // current user object
-var _D={};         // bulk data cache
-var _curV='';      // current view
+var _U=null;
+var _D={};
+var _curV='';
 var _pollTimer=null;
+var _bgRefreshTimer=null;
+var _dataLoaded=false;
 
-// ── Data access helpers ───────────────────────────────────────────────────────
-function _drivers()  {return _D.drivers||[];}
-function _vehicles() {return _D.vehicles||[];}
+// Data helpers
+function _drivers(){return _D.drivers||[];}
+function _vehicles(){return _D.vehicles||[];}
 function _driverByID(id){return _drivers().filter(function(d){return String(d.DriverID||'')===String(id);})[0]||null;}
 function _vehicleByID(id){return _vehicles().filter(function(v){return String(v.VehicleID||'')===String(id);})[0]||null;}
-function _vehicleByNo(no){return _vehicles().filter(function(v){return String(v.VehicleNo||'').toLowerCase()===String(no).toLowerCase();})[0]||null;}
-function _driverName(id){var d=_driverByID(id);return d?String(d.Name||id):id;}
-function _vehicleNo(id){var v=_vehicleByID(id);return v?String(v.VehicleNo||id):id;}
+function _driverName(id){var d=_driverByID(id);return d?String(d.Name||id):String(id);}
+function _vehicleNo(id){var v=_vehicleByID(id);return v?String(v.VehicleNo||id):String(id);}
 
-// ── Login ─────────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// LOGIN
+// ════════════════════════════════════════════════════════════════════════════
 function doLogin(){
   var email=document.getElementById('inp-email').value.trim();
   var pass=document.getElementById('inp-pass').value;
@@ -181,16 +215,17 @@ function doLogin(){
   _gasLogin(email,pass,function(res){
     _setLoginBusy(false);
     if(!res||!res.success||!res.user){_showLoginErr((res&&res.error)||'Login failed.');return;}
-    var u=res.user;
-    _saveSession(u,'tok_'+Date.now());
-    _bootApp(u);
+    _saveSession(res.user);
+    _bootApp(res.user);
   },function(err){
     _setLoginBusy(false);
     _showLoginErr(err.message||'Server error. Try again.');
   });
 }
 
-// ── Boot app ──────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// BOOT APP
+// ════════════════════════════════════════════════════════════════════════════
 function _bootApp(user){
   _U=user;
   document.getElementById('sLogin').className='scr';
@@ -198,35 +233,188 @@ function _bootApp(user){
   _buildSidebar();
   _buildMobNav();
   _updateSbProfile();
-  var startView=_defaultView(user.role);
-  _loadV(startView);
+
+  // ── SPEED: Try localStorage first, show UI instantly ──────────────────
+  var cached=_loadLocalData();
+  if(cached){
+    _D=cached;
+    _dataLoaded=true;
+    var startView=_defaultView(user.role);
+    _loadV(startView);
+    // Background refresh after 800ms
+    setTimeout(function(){_fetchFreshData(true);},800);
+  } else {
+    // No cache — show skeletons, fetch from GAS
+    var startView=_defaultView(user.role);
+    _loadV(startView);
+    _showSkelContent();
+    _fetchFreshData(false);
+  }
   _startPoll();
-  _loadAllData();
 }
+
+// ── localStorage data layer ───────────────────────────────────────────────
+function _loadLocalData(){
+  try{
+    var role=_U?_U.role:'driver';
+    var key='alldata_'+role;
+    return _lcGet(key);
+  }catch(e){return null;}
+}
+function _saveLocalData(data){
+  try{
+    var role=_U?_U.role:'driver';
+    // Don't cache huge audit logs
+    var toSave=Object.assign({},data);
+    if(toSave.auditLogs)delete toSave.auditLogs;
+    _lcSet('alldata_'+role, toSave, 5*60*1000); // 5 min TTL
+  }catch(e){}
+}
+
+function _fetchFreshData(silent){
+  if(!_U)return;
+  _gas('getAllData',[],function(res){
+    if(res&&res.success!==false){
+      _D=res;
+      _dataLoaded=true;
+      _saveLocalData(res);
+      _renderCurrentView();
+      _checkCelebrations();
+      _checkAnnouncements();
+      _updateBadges();
+      if(!silent)_hideLoader();
+    }
+  },function(err){
+    if(!silent){
+      _toast('Data load failed. Using cached.','warn');
+    }
+  });
+}
+
+function _refreshData(){
+  _toast('Refreshing...','info');
+  _lcClearAll();
+  _fetchFreshData(false);
+}
+
+function _startPoll(){
+  if(_pollTimer)clearInterval(_pollTimer);
+  _pollTimer=setInterval(function(){
+    if(_U&&document.visibilityState!=='hidden'){
+      _fetchFreshData(true);
+    }
+  },CFG.POLL_INTERVAL||60000); // 60s (was 30s — reduce API quota usage)
+}
+
+// Page visibility — pause poll when tab is hidden
+document.addEventListener('visibilitychange',function(){
+  if(document.visibilityState==='visible'&&_U){
+    // Tab became visible — refresh if data is older than 2 min
+    var cached=_loadLocalData();
+    if(!cached){_fetchFreshData(true);}
+  }
+});
 
 function _defaultView(role){
-  if(role==='driver') return 'my_dashboard';
-  return 'dashboard';
+  return role==='driver'?'my_dashboard':'dashboard';
 }
 
-// ── Check existing session on page load ───────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// VIEW ROUTING
+// ════════════════════════════════════════════════════════════════════════════
+window._loadV=function(view){
+  _curV=view;
+  closeSb();
+  document.querySelectorAll('.nv').forEach(function(el){el.classList.toggle('on',el.dataset.view===view);});
+  document.querySelectorAll('.mob-nav-btn').forEach(function(el){el.classList.toggle('on',el.dataset.view===view);});
+  var mod=(APP_CONFIG.MODULES||{})[view]||{};
+  document.getElementById('tb-title').textContent=mod.label||view;
+  document.getElementById('tb-sub').textContent='Isha Steels Enterprises';
+  _renderView(view);
+};
+function _renderCurrentView(){if(_curV)_renderView(_curV);}
+function _renderView(view){
+  var c=document.getElementById('content');if(!c)return;
+  requestAnimationFrame(function(){
+    c.style.animation='none';
+    requestAnimationFrame(function(){
+      c.style.animation='fadeIn .2s ease both';
+      switch(view){
+        case 'dashboard':       c.innerHTML=_vDashboard();break;
+        case 'operations':      c.innerHTML=_vOperations();break;
+        case 'vehicles':        c.innerHTML=_vVehicles();break;
+        case 'drivers':         c.innerHTML=_vDrivers();break;
+        case 'attendance':      c.innerHTML=_vAttendance();break;
+        case 'muster':          c.innerHTML=_vMuster();break;
+        case 'fuel':            c.innerHTML=_vFuel();break;
+        case 'trips':           c.innerHTML=_vTrips();break;
+        case 'expenses':        c.innerHTML=_vExpenses();break;
+        case 'fastag':          c.innerHTML=_vFastag();break;
+        case 'kmlogs':          c.innerHTML=_vKMLogs();break;
+        case 'dispatch':        c.innerHTML=_vDispatch();break;
+        case 'inspection':      c.innerHTML=_vInspection();break;
+        case 'cleaning':        c.innerHTML=_vCleaning();break;
+        case 'services':        c.innerHTML=_vServices();break;
+        case 'documents':       c.innerHTML=_vDocuments();break;
+        case 'reminders':       c.innerHTML=_vReminders();break;
+        case 'maintenance':     c.innerHTML=_vMaintenance();break;
+        case 'penalties':       c.innerHTML=_vPenalties();break;
+        case 'rewards':         c.innerHTML=_vRewards();break;
+        case 'checklist':       c.innerHTML=_vChecklist();break;
+        case 'checklist_setup': c.innerHTML=_vChecklistSetup();break;
+        case 'delegation':      c.innerHTML=_vDelegation();break;
+        case 'leave_requests':  c.innerHTML=_vLeaveRequests();break;
+        case 'holidays':        c.innerHTML=_vHolidays();break;
+        case 'announcements':   c.innerHTML=_vAnnouncements();break;
+        case 'analytics':       c.innerHTML=_vAnalytics();setTimeout(_initAnalyticsCharts,100);break;
+        case 'payroll':         c.innerHTML=_vPayroll();break;
+        case 'auditlog':        c.innerHTML=_vAuditLog();break;
+        case 'users':           c.innerHTML=_vUsers();break;
+        case 'settings':        c.innerHTML=_vSettings();break;
+        case 'my_dashboard':    c.innerHTML=_vMyDashboard();break;
+        case 'my_attendance':   c.innerHTML=_vMyAttendance();break;
+        case 'my_inspection':   c.innerHTML=_vMyInspection();break;
+        case 'my_cleaning':     c.innerHTML=_vMyCleaning();break;
+        case 'my_fuel':         c.innerHTML=_vMyFuel();break;
+        case 'my_trips':        c.innerHTML=_vMyTrips();break;
+        case 'my_expenses':     c.innerHTML=_vMyExpenses();break;
+        case 'my_kmlogs':       c.innerHTML=_vMyKMLogs();break;
+        case 'my_checklist':    c.innerHTML=_vMyChecklist();break;
+        case 'my_delegations':  c.innerHTML=_vMyDelegations();break;
+        case 'my_leave':        c.innerHTML=_vMyLeave();break;
+        case 'profile':         c.innerHTML=_vProfile();break;
+        default:                c.innerHTML=_vDashboard();
+      }
+    });
+  });
+}
+
+function _showSkelContent(){
+  var c=document.getElementById('content');if(!c)return;
+  c.innerHTML='<div class="skel-wrap">'+
+    '<div class="skel" style="height:32px;width:200px;border-radius:4px;margin-bottom:20px"></div>'+
+    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">'+
+    [1,2,3,4].map(function(){return'<div class="skel" style="height:90px;border-radius:8px"></div>';}).join('')+'</div>'+
+    '<div class="skel" style="height:180px;border-radius:8px;margin-bottom:12px"></div>'+
+    '<div class="skel" style="height:120px;border-radius:8px"></div></div>';
+}
+
+// Page load
 window.addEventListener('load',function(){
   var sess=_loadSession();
   if(sess&&sess.user){
     _bootApp(sess.user);
   } else {
     document.getElementById('sLogin').className='scr on';
-    document.getElementById('sApp').className='scr';
     document.documentElement.classList.remove('has-session');
     var em=document.getElementById('inp-email');if(em)em.focus();
   }
 });
 
-// ── Logout ────────────────────────────────────────────────────────────────────
 function doLogout(){
   if(!confirm('Logout karna chahte ho?'))return;
-  _clearSession();
-  _U=null;_D={};_curV='';
+  _clearSession();_lcClearAll();
+  _U=null;_D={};_curV='';_dataLoaded=false;
   if(_pollTimer){clearInterval(_pollTimer);_pollTimer=null;}
   document.getElementById('sApp').className='scr';
   document.getElementById('sLogin').className='scr on';
@@ -235,142 +423,40 @@ function doLogout(){
   document.documentElement.classList.remove('has-session');
 }
 
-// ── Load all data ─────────────────────────────────────────────────────────────
-function _loadAllData(silent){
-  if(!_U)return;
-  if(!silent)_showSkelContent();
-  _gas('getAllData',[],function(res){
-    if(res&&res.success!==false){
-      _D=res;
-      _renderCurrentView();
-      _checkCelebrations();
-      _checkAnnouncements();
-    }
-  },function(err){
-    if(!silent)_toast('Data load failed: '+err.message,'err');
-  });
-}
-
-function _refreshData(){
-  _toast('Refreshing...','info');
-  _loadAllData(true);
-}
-
-function _startPoll(){
-  if(_pollTimer)clearInterval(_pollTimer);
-  _pollTimer=setInterval(function(){
-    if(_U)_loadAllData(true);
-  },(APP_CONFIG.POLL_INTERVAL||30000));
-}
-
-// ── View routing ──────────────────────────────────────────────────────────────
-window._loadV=function(view){
-  _curV=view;
-  closeSb();
-  // Update sidebar active state
-  document.querySelectorAll('.nv').forEach(function(el){
-    el.classList.toggle('on',el.dataset.view===view);
-  });
-  document.querySelectorAll('.mob-nav-btn').forEach(function(el){
-    el.classList.toggle('on',el.dataset.view===view);
-  });
-  var mod=APP_CONFIG.MODULES[view]||{};
-  document.getElementById('tb-title').textContent=mod.label||view;
-  document.getElementById('tb-sub').textContent='Isha Steels Enterprises';
-  _renderView(view);
-};
-
-function _renderCurrentView(){if(_curV)_renderView(_curV);}
-
-function _renderView(view){
-  var c=document.getElementById('content');
-  if(!c)return;
-  c.style.animation='none';
-  requestAnimationFrame(function(){
-    c.style.animation='fadein .22s ease both';
-    switch(view){
-      case 'dashboard':       c.innerHTML=_vDashboard();break;
-      case 'operations':      c.innerHTML=_vOperations();break;
-      case 'vehicles':        c.innerHTML=_vVehicles();break;
-      case 'drivers':         c.innerHTML=_vDrivers();break;
-      case 'attendance':      c.innerHTML=_vAttendance();break;
-      case 'muster':          c.innerHTML=_vMuster();break;
-      case 'fuel':            c.innerHTML=_vFuel();break;
-      case 'trips':           c.innerHTML=_vTrips();break;
-      case 'expenses':        c.innerHTML=_vExpenses();break;
-      case 'fastag':          c.innerHTML=_vFastag();break;
-      case 'kmlogs':          c.innerHTML=_vKMLogs();break;
-      case 'dispatch':        c.innerHTML=_vDispatch();break;
-      case 'inspection':      c.innerHTML=_vInspection();break;
-      case 'cleaning':        c.innerHTML=_vCleaning();break;
-      case 'services':        c.innerHTML=_vServices();break;
-      case 'documents':       c.innerHTML=_vDocuments();break;
-      case 'reminders':       c.innerHTML=_vReminders();break;
-      case 'maintenance':     c.innerHTML=_vMaintenance();break;
-      case 'penalties':       c.innerHTML=_vPenalties();break;
-      case 'rewards':         c.innerHTML=_vRewards();break;
-      case 'checklist':       c.innerHTML=_vChecklist();break;
-      case 'checklist_setup': c.innerHTML=_vChecklistSetup();break;
-      case 'delegation':      c.innerHTML=_vDelegation();break;
-      case 'leave_requests':  c.innerHTML=_vLeaveRequests();break;
-      case 'holidays':        c.innerHTML=_vHolidays();break;
-      case 'announcements':   c.innerHTML=_vAnnouncements();break;
-      case 'analytics':       c.innerHTML=_vAnalytics();_initAnalyticsCharts();break;
-      case 'payroll':         c.innerHTML=_vPayroll();break;
-      case 'auditlog':        c.innerHTML=_vAuditLog();break;
-      case 'users':           c.innerHTML=_vUsers();break;
-      case 'settings':        c.innerHTML=_vSettings();break;
-      // Driver views
-      case 'my_dashboard':    c.innerHTML=_vMyDashboard();break;
-      case 'my_attendance':   c.innerHTML=_vMyAttendance();break;
-      case 'my_inspection':   c.innerHTML=_vMyInspection();break;
-      case 'my_cleaning':     c.innerHTML=_vMyCleaning();break;
-      case 'my_fuel':         c.innerHTML=_vMyFuel();break;
-      case 'my_trips':        c.innerHTML=_vMyTrips();break;
-      case 'my_expenses':     c.innerHTML=_vMyExpenses();break;
-      case 'my_kmlogs':       c.innerHTML=_vMyKMLogs();break;
-      case 'my_checklist':    c.innerHTML=_vMyChecklist();break;
-      case 'my_delegations':  c.innerHTML=_vMyDelegations();break;
-      case 'my_leave':        c.innerHTML=_vMyLeave();break;
-      case 'profile':         c.innerHTML=_vProfile();break;
-      default:                c.innerHTML=_vDashboard();
-    }
-  });
-}
-
-function _showSkelContent(){
-  var c=document.getElementById('content');if(!c)return;
-  c.innerHTML='<div class="skel skel-card"></div><div class="skel skel-card" style="height:60px"></div><div class="skel skel-card" style="height:100px"></div>';
-}
-
-// ── Sidebar builder ───────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// SIDEBAR + MOBILE NAV
+// ════════════════════════════════════════════════════════════════════════════
 function _buildSidebar(){
   if(!_U)return;
   var nav=document.getElementById('sb-nav');if(!nav)return;
   var role=_U.role||'driver';
-  var groups=APP_CONFIG.NAV_GROUPS[role];
-  if(!groups){
-    // Driver: flat list
-    var items=APP_CONFIG.ROLE_MODULES[role]||[];
-    nav.innerHTML='<div class="nv-sec">'+items.map(function(m){
-      var md=APP_CONFIG.MODULES[m]||{};
-      return '<div class="nv" data-view="'+m+'" onclick="_loadV(\''+m+'\')"><i class="fas '+md.icon+'" style="color:'+md.color+'"></i>'+md.label+'</div>';
-    }).join('')+'</div>';
-    nav.innerHTML+='<hr class="nv-sep"><div class="nv nv-danger" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i>Logout</div>';
-    return;
-  }
+  var groups=APP_CONFIG.NAV_GROUPS&&APP_CONFIG.NAV_GROUPS[role];
   var html='';
-  groups.forEach(function(g){
-    html+='<div class="nv-sec"><div class="nv-sec-lbl">'+g.label+'</div>';
-    g.items.forEach(function(m){
-      var md=APP_CONFIG.MODULES[m]||{};
-      var badge=m==='leave_requests'?'<span class="nv-badge" id="badge-leave"></span>':'';
-      var annBadge=m==='announcements'?'<span class="nv-badge" id="badge-ann"></span>':'';
-      html+='<div class="nv" data-view="'+m+'" onclick="_loadV(\''+m+'\')"><i class="fas '+md.icon+'" style="color:'+md.color+'"></i>'+_esc(md.label)+badge+annBadge+'</div>';
+  if(groups){
+    groups.forEach(function(g){
+      html+='<div class="nv-sec"><div class="nv-lbl">'+g.label+'</div>';
+      g.items.forEach(function(m){
+        var md=(APP_CONFIG.MODULES||{})[m]||{};
+        var badge=m==='leave_requests'?'<span class="nv-badge" id="badge-leave" style="display:none">0</span>':'';
+        html+='<div class="nv" data-view="'+m+'" onclick="_loadV(\''+m+'\')" title="'+_escInline(md.label||m)+'">'+
+          '<i class="fas '+(md.icon||'fa-circle')+'" style="color:'+md.color+'"></i>'+
+          '<span>'+_escInline(md.label||m)+'</span>'+badge+'</div>';
+      });
+      html+='</div>';
+    });
+  } else {
+    var items=(APP_CONFIG.ROLE_MODULES&&APP_CONFIG.ROLE_MODULES[role])||[];
+    html+='<div class="nv-sec">';
+    items.forEach(function(m){
+      var md=(APP_CONFIG.MODULES||{})[m]||{};
+      html+='<div class="nv" data-view="'+m+'" onclick="_loadV(\''+m+'\')" title="'+_escInline(md.label||m)+'">'+
+        '<i class="fas '+(md.icon||'fa-circle')+'" style="color:'+md.color+'"></i>'+
+        '<span>'+_escInline(md.label||m)+'</span></div>';
     });
     html+='</div>';
-  });
-  html+='<hr class="nv-sep"><div class="nv nv-danger" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i>Logout</div>';
+  }
+  html+='<hr class="nv-sep">';
+  html+='<div class="nv nv-danger" onclick="doLogout()" title="Logout"><i class="fas fa-right-from-bracket" style="color:#EA4335"></i><span>Logout</span></div>';
   nav.innerHTML=html;
 }
 
@@ -378,12 +464,12 @@ function _buildMobNav(){
   if(!_U)return;
   var nav=document.getElementById('mobNav');if(!nav)return;
   var role=_U.role||'driver';
-  var items=(APP_CONFIG.MOB_NAV[role]||[]).slice(0,5);
+  var items=((APP_CONFIG.MOB_NAV&&APP_CONFIG.MOB_NAV[role])||[]).slice(0,5);
   nav.innerHTML=items.map(function(m){
-    var md=APP_CONFIG.MODULES[m]||{};
-    return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(\''+m+'\')">' +
-      '<i class="fas '+md.icon+'"></i>' +
-      '<span class="mob-nav-lbl">'+md.label.split(' ')[0]+'</span></button>';
+    var md=(APP_CONFIG.MODULES||{})[m]||{};
+    return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(\''+m+'\')">'+
+      '<i class="fas '+(md.icon||'fa-circle')+'"></i>'+
+      '<span class="mob-nav-lbl">'+_escInline((md.label||m).split(' ')[0])+'</span></button>';
   }).join('');
 }
 
@@ -391,176 +477,91 @@ function _updateSbProfile(){
   if(!_U)return;
   var ava=document.getElementById('sb-ava'),avaTxt=document.getElementById('sb-ava-txt');
   var nm=document.getElementById('sb-name'),rl=document.getElementById('sb-role');
-  var init=_initials(_U.name||'');var col=_avatarColor(_U.name||'');
-  if(ava)ava.style.background='linear-gradient(135deg,'+col+','+col+'aa)';
-  if(avaTxt)avaTxt.textContent=init;
+  var col=_avatarColor(_U.name||'');
+  if(ava)ava.style.background='linear-gradient(135deg,'+col+','+col+'bb)';
+  if(avaTxt)avaTxt.textContent=_initials(_U.name||'');
   if(nm)nm.textContent=_U.name||'User';
   if(rl)rl.textContent=(_U.role||'driver').charAt(0).toUpperCase()+(_U.role||'').slice(1);
 }
 
-// ── Celebrations ──────────────────────────────────────────────────────────────
 function _checkCelebrations(){
   var cels=_D.celebrations||[];
   cels.forEach(function(c){
-    _addNtf(
-      (c.type==='birthday'?'🎂 Happy Birthday ':'🏢 Work Anniversary — ')+c.name+'!',
-      c.type==='birthday'?'fa-cake-candles':'fa-building','#FFF3E0','#E65100'
-    );
+    _addNtf((c.type==='birthday'?'🎂 Happy Birthday ':'🏢 Work Anniversary — ')+c.name+'!','fa-cake-candles','#FEF7E0','#B06000');
   });
 }
 function _checkAnnouncements(){
   var anns=_D.announcements||[];
   var badge=document.getElementById('badge-ann');
-  if(badge)badge.textContent=anns.length||'';
-  if(badge)badge.style.display=anns.length?'':'none';
+  if(badge){badge.textContent=anns.length||'';badge.style.display=anns.length?'':'none';}
 }
-
-// ── Badge updater ─────────────────────────────────────────────────────────────
 function _updateBadges(){
   var leaves=(_D.leaveRequests||[]).filter(function(l){return String(l.status||'')==='Pending';});
   var badge=document.getElementById('badge-leave');
   if(badge){badge.textContent=leaves.length||'';badge.style.display=leaves.length?'':'none';}
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// VIEWS — ADMIN/MANAGER
-// ════════════════════════════════════════════════════════════════════════════
+// ── Optimistic write helper ───────────────────────────────────────────────
+// Updates local cache immediately, then syncs to GAS
+// Shows result instantly without waiting for network
+function _optimisticWrite(fn, args, localUpdateFn, successMsg, errorMsg){
+  // 1. Apply local update immediately
+  if(localUpdateFn){try{localUpdateFn(_D);}catch(e){}}
+  _saveLocalData(_D);
+  _renderCurrentView();
+  // 2. Show success optimistically
+  _toast((successMsg||'Saved!'),'success');
+  // 3. Sync to GAS in background
+  _gas(fn,args,function(r){
+    if(r&&r.success){
+      // Server confirmed — refresh data silently
+      setTimeout(function(){_fetchFreshData(true);},1000);
+    } else {
+      _toast('Sync error: '+(r&&r.error||errorMsg||'Try again'),'err');
+      // Revert by fetching fresh data
+      _fetchFreshData(true);
+    }
+  },function(e){
+    _toast('Network error — changes may not be saved','warn');
+    _fetchFreshData(true);
+  });
+}
 
-// ── Common page header ────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ════════════════════════════════════════════════════════════════════════════
 function _ph(title,btn){
-  return '<div class="page-hdr"><div class="page-title">'+title+'</div><div class="page-actions">'+(btn||'')+'</div></div>';
+  return '<div class="page-hdr"><div class="page-title">'+title+'</div>'+
+    '<div class="page-actions">'+(btn||'')+'</div></div>';
 }
 function _emptyState(icon,title,sub){
-  return '<div class="empty-state"><div class="es-icon">'+icon+'</div><div class="es-title">'+_esc(title)+'</div><div class="es-sub">'+_esc(sub||'')+'</div></div>';
+  return '<div class="empty-state"><div class="es-icon">'+icon+'</div>'+
+    '<div class="es-title">'+_esc(title)+'</div>'+
+    '<div class="es-sub">'+_esc(sub||'')+'</div></div>';
 }
+function _kpi(icon,color,val,label,sub,extra){
+  return '<div class="kpi-card" style="--kc:'+color+'"'+(extra?' '+extra:'')+'>'+
+    '<div class="kpi-top"><div class="kpi-ico"><i class="fas '+icon+'"></i></div></div>'+
+    '<div class="kpi-val">'+_esc(String(val))+'</div>'+
+    '<div class="kpi-lbl">'+_esc(label)+'</div>'+
+    '<div class="kpi-sub">'+_esc(sub||'')+'</div></div>';
+}
+function _dr(label,val){
+  return '<div class="dr-row"><div class="dr-label">'+_esc(label)+'</div><div class="dr-val">'+val+'</div></div>';
+}
+function _escInline(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
-// ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function _vDashboard(){
-  var veh=_D.vehicles||[];
-  var drv=_D.drivers||[];
-  var att=_D.attendance||[];
-  var fuel=_D.fuel||[];
-  var cels=_D.celebrations||[];
-  var anns=_D.announcements||[];
-  var dels=_D.delegations||[];
-  var leaves=_D.leaveRequests||[];
-
-  var today=_today();
-  var todayAtt=att.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
-  var present=todayAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
-  var late=todayAtt.filter(function(a){return a.Status==='Late';}).length;
-  var pendingLeaves=leaves.filter(function(l){return l.status==='Pending';}).length;
-  var overdueTask=dels.filter(function(d){return d.is_overdue;}).length;
-
-  var activeVeh=veh.filter(function(v){return v.Status==='Active';}).length;
-  var activeDrivers=drv.filter(function(d){return d.Status==='Active';}).length;
-
-  // Expiry alerts
-  var alerts=[];
-  veh.forEach(function(v){
-    var insD=_daysLeft(String(v.InsuranceExpiry||'').slice(0,10));
-    var pucD=_daysLeft(String(v.PUCExpiry||'').slice(0,10));
-    var ftB=Number(v.FastagBalance||0);
-    if(insD>=0&&insD<=30)alerts.push({type:'danger',icon:'🛡️',msg:v.VehicleNo+' Insurance expiry: '+insD+'d'});
-    if(pucD>=0&&pucD<=15)alerts.push({type:'warn',icon:'🌿',msg:v.VehicleNo+' PUC expiry: '+pucD+'d'});
-    if(ftB<300)alerts.push({type:'warn',icon:'🏷️',msg:v.VehicleNo+' Fastag low: ₹'+ftB});
-  });
-
-  // Today's fuel spend
-  var todayFuel=fuel.filter(function(f){return String(f.Date||'').slice(0,10)===today;})
-    .reduce(function(s,f){return s+Number(f.Amount||0);},0);
-
-  // Monthly fuel
-  var mon=today.slice(0,7);
-  var monFuel=fuel.filter(function(f){return String(f.Date||'').slice(0,7)===mon;})
-    .reduce(function(s,f){return s+Number(f.Amount||0);},0);
-
-  var html='';
-
-  // Celebration banners
-  cels.forEach(function(c){
-    html+='<div class="cel-banner"><div class="cel-icon">'+(c.type==='birthday'?'🎂':'🏢')+'</div>'+
-      '<div class="cel-msg"><div class="cel-name">'+_esc(c.type==='birthday'?'Happy Birthday, ':'Happy Work Anniversary, ')+_esc(c.name)+'!</div>'+
-      '<div class="cel-sub">'+(c.type==='birthday'?'Wishing you all the best!':''+c.years+' years with ISE!')+'</div></div></div>';
-  });
-
-  // KPI grid
-  html+='<div class="kpi-grid">';
-  html+=_kpi('fa-car','#2980B9',activeVeh,'Active Vehicles','Total fleet');
-  html+=_kpi('fa-id-badge','#8E44AD',activeDrivers,'Active Drivers','On roster');
-  html+=_kpi('fa-clipboard-check','#27AE60',present,'Present Today','Out of '+activeDrivers);
-  html+=_kpi('fa-clock','#E67E22',late,'Late Today','Late arrivals');
-  html+=_kpi('fa-gas-pump','#D51515',_inr(todayFuel),'Fuel Today','Spent today');
-  html+=_kpi('fa-gas-pump','#E67E22',_inr(monFuel),'Fuel This Month','Running total');
-  html+=_kpi('fa-calendar-xmark','#8E44AD',pendingLeaves,'Leave Pending','Awaiting approval',pendingLeaves>0?'onclick="_loadV(\'leave_requests\')"':'');
-  html+=_kpi('fa-triangle-exclamation','#E74C3C',overdueTask,'Overdue Tasks','Action needed',overdueTask>0?'onclick="_loadV(\'delegation\')"':'');
-  html+='</div>';
-
-  // Alerts
-  if(alerts.length){
-    html+='<div class="sec-hdr"><i class="fas fa-triangle-exclamation" style="color:var(--O)"></i>Alerts ('+alerts.length+')</div>';
-    html+='<div class="alert-card warn"><div class="ac-title">Vehicle Alerts</div>';
-    alerts.slice(0,6).forEach(function(a){html+='<div class="ac-row">'+a.icon+' '+_esc(a.msg)+'</div>';});
-    html+='</div>';
-  }
-
-  // Two column layout
-  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:4px">';
-
-  // Today's attendance
-  html+='<div>';
-  html+='<div class="sec-hdr"><i class="fas fa-users" style="color:var(--G)"></i>Today\'s Attendance</div>';
-  if(!todayAtt.length){
-    html+='<div style="color:var(--tx3);font-size:13px;padding:16px 0">No records yet today.</div>';
-  } else {
-    html+='<div style="display:flex;flex-direction:column;gap:6px">';
-    todayAtt.slice(0,8).forEach(function(a){
-      var col=a.Status==='Present'?'var(--G)':a.Status==='Late'?'var(--O)':'var(--R)';
-      html+='<div class="list-card" style="padding:10px 13px;cursor:default">'+
-        '<div class="lc-row"><span style="font-size:13px;font-weight:700;color:var(--tx)">'+_esc(_driverName(a.DriverID))+'</span>'+
-        '<span class="badge badge-'+String(a.Status||'').toLowerCase().replace(' ','-')+'">'+_esc(a.Status)+'</span></div>'+
-        '<div class="lc-meta"><i class="fas fa-car" style="color:'+col+'"></i>'+_esc(_vehicleNo(a.VehicleID))+
-        ' &nbsp;·&nbsp; IN: '+_esc(_fmtTime(a.InTime))+(a.OutTime?' &nbsp;·&nbsp; OUT: '+_esc(_fmtTime(a.OutTime)):'')+'</div></div>';
-    });
-    html+='</div>';
-    if(todayAtt.length>8)html+='<div style="font-size:12px;color:var(--P);cursor:pointer;margin-top:6px" onclick="_loadV(\'attendance\')">View all '+todayAtt.length+' records →</div>';
-  }
-  html+='</div>';
-
-  // Announcements
-  html+='<div>';
-  html+='<div class="sec-hdr"><i class="fas fa-bullhorn" style="color:var(--P)"></i>Announcements</div>';
-  if(!anns.length){
-    html+='<div style="color:var(--tx3);font-size:13px;padding:16px 0">No announcements.</div>';
-  } else {
-    anns.slice(0,3).forEach(function(a){
-      var priority=String(a.priority||'Normal').toLowerCase();
-      html+='<div class="ann-card '+priority+'">' +
-        '<div class="ann-text">'+_esc(a.text)+'</div>' +
-        '<div class="ann-meta"><i class="fas fa-user"></i>'+_esc(a.posted_by_name)+'&nbsp;·&nbsp;<i class="fas fa-clock"></i>'+_fmtDate(a.posted_at)+'</div></div>';
-    });
-    if(anns.length>3)html+='<div style="font-size:12px;color:var(--P);cursor:pointer;margin-top:6px" onclick="_loadV(\'announcements\')">View all →</div>';
-  }
-  html+='</div>';
-
-  html+='</div>'; // end grid
-
-  // Recent fuel
-  var recentFuel=(fuel||[]).slice(-5).reverse();
-  if(recentFuel.length){
-    html+='<div class="sec-hdr"><i class="fas fa-gas-pump" style="color:var(--O)"></i>Recent Fuel Entries</div>';
-    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
-      '<th>Vehicle</th><th>Driver</th><th>Date</th><th>Qty</th><th>Amount</th><th>Mileage</th></tr></thead><tbody>';
-    recentFuel.forEach(function(f){
-      var mil=parseFloat(f.Mileage||0);
-      var milCol=mil>0&&mil<6?'color:var(--R);font-weight:800':mil>=12?'color:var(--G);font-weight:700':'';
-      html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(f.VehicleID))+'</span></td>'+
-        '<td>'+_esc(_driverName(f.DriverID))+'</td>'+
-        '<td>'+_fmtDate(f.Date)+'</td>'+
-        '<td>'+_esc(f.FuelQty)+'L</td>'+
-        '<td>'+_inr(f.Amount)+'</td>'+
-        '<td style="'+milCol+'">'+(mil>0?mil+' km/L':'—')+'</td></tr>';
-    });
+// ════════════════════════════════════════════════════════════════════════════
+// RESPONSIVE GRID HELPER — detects viewport and returns appropriate grid
+// ════════════════════════════════════════════════════════════════════════════
+function _isMobile(){return window.innerWidth<640;}
+function _isTablet(){return window.innerWidth>=640&&window.innerWidth<1024;}
+function _isDesktop(){return window.innerWidth>=1024;}
+function _gridCols(mob,tab,desk){
+  if(_isMobile())return mob||1;
+  if(_isTablet())return tab||2;
+  return desk||3;
+}
     html+='</tbody></table></div>';
   }
 

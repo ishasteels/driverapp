@@ -393,7 +393,7 @@ function _showSkelContent(){
   var c=document.getElementById('content');if(!c)return;
   c.innerHTML='<div class="skel-wrap">'+
     '<div class="skel" style="height:32px;width:200px;border-radius:4px;margin-bottom:20px"></div>'+
-    '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-bottom:20px">'+
     [1,2,3,4].map(function(){return'<div class="skel" style="height:90px;border-radius:8px"></div>';}).join('')+'</div>'+
     '<div class="skel" style="height:180px;border-radius:8px;margin-bottom:12px"></div>'+
     '<div class="skel" style="height:120px;border-radius:8px"></div></div>';
@@ -462,12 +462,14 @@ function _buildSidebar(){
 
 function _buildMobNav(){
   if(!_U)return;
-  var nav=document.getElementById('mobNav');if(!nav)return;
+  // Support both #mobNav direct and #mob-nav-inner wrapper
+  var nav=document.getElementById('mob-nav-inner')||document.getElementById('mobNav');
+  if(!nav)return;
   var role=_U.role||'driver';
   var items=((APP_CONFIG.MOB_NAV&&APP_CONFIG.MOB_NAV[role])||[]).slice(0,5);
   nav.innerHTML=items.map(function(m){
     var md=(APP_CONFIG.MODULES||{})[m]||{};
-    return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(\''+m+'\')">'+
+    return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(''+m+'')">'+
       '<i class="fas '+(md.icon||'fa-circle')+'"></i>'+
       '<span class="mob-nav-lbl">'+_escInline((md.label||m).split(' ')[0])+'</span></button>';
   }).join('');
@@ -562,21 +564,133 @@ function _gridCols(mob,tab,desk){
   if(_isTablet())return tab||2;
   return desk||3;
 }
-    html+='</tbody></table></div>';
+
+// ════════════════════════════════════════════════════════════════════════════
+// DASHBOARD VIEW
+// ════════════════════════════════════════════════════════════════════════════
+function _vDashboard(){
+  var veh=_D.vehicles||[];
+  var drv=_D.drivers||[];
+  var att=_D.attendance||[];
+  var fuel=_D.fuel||[];
+  var lv=_D.leaveRequests||[];
+  var dels=_D.delegations||[];
+  var anns=_D.announcements||[];
+  var cels=_D.celebrations||[];
+  var today=_today();
+  var mon=_currMonth();
+
+  var activeVeh=veh.filter(function(v){return v.Status==='Active';}).length;
+  var activeDrv=drv.filter(function(d){return d.Status==='Active';}).length;
+  var todayAtt=att.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
+  var present=todayAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
+  var late=todayAtt.filter(function(a){return a.Status==='Late';}).length;
+  var monFuel=fuel.filter(function(f){return String(f.Date||'').startsWith(mon);}).reduce(function(s,f){return s+Number(f.Amount||0);},0);
+  var todayFuel=fuel.filter(function(f){return String(f.Date||'').slice(0,10)===today;}).reduce(function(s,f){return s+Number(f.Amount||0);},0);
+  var pendingLv=lv.filter(function(l){return String(l.status||'')==='Pending';}).length;
+  var overdueDels=dels.filter(function(d){return d.is_overdue;}).length;
+
+  // Alerts
+  var alerts=[];
+  veh.forEach(function(v){
+    var insD=_daysLeft(String(v.InsuranceExpiry||'').slice(0,10));
+    var pucD=_daysLeft(String(v.PUCExpiry||'').slice(0,10));
+    var ftB=Number(v.FastagBalance||0);
+    if(insD>=0&&insD<=30)alerts.push({type:'ins',vno:v.VehicleNo,days:insD,msg:'Insurance: '+insD+'d baaki',col:insD<7?'var(--R)':'var(--O)',ico:'fa-shield'});
+    if(pucD>=0&&pucD<=15)alerts.push({type:'puc',vno:v.VehicleNo,days:pucD,msg:'PUC: '+pucD+'d baaki',col:'var(--O)',ico:'fa-leaf'});
+    if(ftB<300)alerts.push({type:'ft',vno:v.VehicleNo,bal:ftB,msg:'Fastag low: ₹'+ftB,col:'var(--W)',ico:'fa-tag'});
+  });
+
+  var html='';
+
+  // Celebrations
+  cels.forEach(function(c){
+    html+='<div class="cel-banner"><span class="cel-icon">'+(c.type==='birthday'?'🎂':'🎉')+'</span>'+
+      '<div><div class="cel-name">'+(c.type==='birthday'?'Birthday — ':'Work Anniversary — ')+_esc(c.name)+'</div>'+
+      '<div class="cel-msg">Wishing you a great day!</div></div></div>';
+  });
+
+  // KPI cards
+  html+='<div class="kpi-grid">'+
+    _kpi('fa-car','#1A73E8',activeVeh,'Active Vehicles','Total fleet')+
+    _kpi('fa-id-badge','#8E44AD',activeDrv,'Active Drivers','On roster')+
+    _kpi('fa-user-check','#2F9E44',present,'Present Today','Out of '+activeDrv)+
+    _kpi('fa-clock','#D97706',late,'Late Today','Late arrivals')+
+    _kpi('fa-gas-pump','#E03131','₹'+_commaNum(todayFuel),'Fuel Today','Spent today')+
+    _kpi('fa-gas-pump','#E67E22','₹'+_commaNum(monFuel),'Fuel This Month','Running total')+
+    _kpi('fa-calendar-xmark','#7048E8',pendingLv,'Leave Pending','Awaiting approval')+
+    _kpi('fa-triangle-exclamation','#E03131',overdueDels,'Overdue Tasks','Action needed')+
+    '</div>';
+
+  // Alerts strip
+  if(alerts.length){
+    html+='<div class="alert-card warn" style="margin-bottom:14px">'+
+      '<i class="fas fa-bell"></i>'+
+      '<div><div class="ac-title">Vehicle Alerts ('+alerts.length+')</div>'+
+      alerts.map(function(a){
+        return '<div class="lc-meta" style="margin-top:4px"><i class="fas '+a.ico+'" style="color:'+a.col+'"></i> '+
+          '<b>'+_esc(a.vno)+'</b> '+_esc(a.msg)+'</div>';
+      }).join('')+'</div></div>';
+  }
+
+  // Two-col grid: attendance + announcements
+  var colStyle=_isMobile()?'display:block':'display:grid;grid-template-columns:1fr 1fr;gap:16px';
+  html+='<div style="'+colStyle+'">';
+
+  // Today attendance
+  html+='<div>';
+  html+='<div class="sec-hdr"><span><i class="fas fa-users" style="color:var(--P)"></i> Today\'s Attendance</span></div>';
+  if(!todayAtt.length){
+    html+='<div style="text-align:center;padding:32px 16px;color:var(--tx3);font-size:13px;background:var(--sur2);border-radius:var(--r);border:1.5px solid var(--bdr)">No records yet today.</div>';
+  }else{
+    html+='<div style="background:var(--sur2);border:1.5px solid var(--bdr);border-radius:var(--r);overflow:hidden">';
+    todayAtt.slice(0,8).forEach(function(a){
+      var drvObj=_driverByID(a.DriverID);
+      var nm=drvObj?drvObj.Name:String(a.DriverID||'');
+      var col=a.Status==='Present'?'var(--G)':a.Status==='Late'?'var(--O)':'var(--R)';
+      var bc=a.Status==='Present'?'badge-green':a.Status==='Late'?'badge-yellow':'badge-red';
+      html+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--bdr)">'+
+        '<div style="width:30px;height:30px;border-radius:50%;background:'+_avatarColor(nm)+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800;flex-shrink:0">'+_initials(nm)+'</div>'+
+        '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_esc(nm)+'</div>'+
+        '<div style="font-size:11px;color:var(--tx3)">'+_fmtTime(a.InTime||'')+(a.OutTime?' — '+_fmtTime(a.OutTime):'')+'</div></div>'+
+        '<span class="badge '+bc+'">'+_esc(a.Status||'')+'</span></div>';
+    });
+    if(todayAtt.length>8)html+='<div style="padding:10px 14px;text-align:center;font-size:12px;color:var(--tx3)">+'+( todayAtt.length-8)+' more</div>';
+    html+='</div>';
+  }
+  html+='</div>';
+
+  // Announcements
+  html+='<div'+(  _isMobile()?' style="margin-top:16px"':'')+'>';
+  html+='<div class="sec-hdr"><span><i class="fas fa-bullhorn" style="color:var(--V)"></i> Announcements</span></div>';
+  if(!anns.length){
+    html+='<div style="text-align:center;padding:32px 16px;color:var(--tx3);font-size:13px;background:var(--sur2);border-radius:var(--r);border:1.5px solid var(--bdr)">No announcements.</div>';
+  }else{
+    anns.slice(0,5).forEach(function(a){
+      var pClass=String(a.Priority||'').toLowerCase()==='urgent'?'urgent':String(a.Priority||'').toLowerCase()==='high'?'high':'normal';
+      html+='<div class="ann-card '+pClass+'">'+
+        '<div class="ann-text">'+_esc(a.Message||a.Announcement||'')+'</div>'+
+        '<div class="ann-meta"><i class="fas fa-user"></i>'+_esc(a.PostedBy||'')+'&nbsp;·&nbsp;<i class="fas fa-calendar"></i>'+_fmtDate(a.Date||a.CreatedAt||'')+'</div></div>';
+    });
+  }
+  html+='</div>';
+  html+='</div>'; // end two-col
+
+  // Upcoming holidays
+  var hols=(_D.holidays||[]).filter(function(h){return _daysLeft(String(h.Date||'').slice(0,10))>=0;}).slice(0,3);
+  if(hols.length){
+    html+='<div class="sec-hdr" style="margin-top:16px"><span><i class="fas fa-calendar-check" style="color:var(--T)"></i> Upcoming Holidays</span></div>';
+    hols.forEach(function(h){
+      var d=_parseAnyDate(String(h.Date||''));
+      html+='<div class="hol-card">'+
+        '<div class="hol-date"><div class="hol-day">'+(d?d.getDate():'?')+'</div><div class="hol-mon">'+(d?MN[d.getMonth()]:'')+'</div></div>'+
+        '<div><div class="hol-name">'+_esc(h.Name||h.HolidayName||'')+'</div>'+
+        '<div class="hol-type">'+_esc(h.Type||'Public Holiday')+'</div></div></div>';
+    });
   }
 
   return html;
 }
-
-function _kpi(icon,color,val,label,sub,extra){
-  return '<div class="kpi-card" style="--kc:'+color+'"'+(extra?' '+extra:'')+' '+(extra?'style="cursor:pointer"':'')+'>' +
-    '<div class="kpi-top"><div class="kpi-ico"><i class="fas '+icon+'"></i></div></div>' +
-    '<div class="kpi-val">'+_esc(String(val))+'</div>' +
-    '<div class="kpi-lbl">'+_esc(label)+'</div>' +
-    '<div class="kpi-sub">'+_esc(sub||'')+'</div></div>';
-}
-
-// ── OPERATIONS / CONTROL ROOM ─────────────────────────────────────────────────
 function _vOperations(){
   var veh=_D.vehicles||[];var drv=_D.drivers||[];
   var att=_D.attendance||[];var fuel=_D.fuel||[];
@@ -2931,3 +3045,53 @@ function _vProfile(){
 
 // ── MN ref for date helpers ──
 var MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// ── INSPECTION (Admin) ────────────────────────────────────────────────────────
+function _vInspection(){
+  var ins=_D.inspections||[];
+  var html=_ph('Vehicle Inspection','');
+  html+='<div class="search-bar"><i class="fas fa-search"></i><input id="ins-search" placeholder="Search by vehicle, driver..." oninput="_filterIns()"></div>';
+  if(!ins.length)return html+_emptyState('🔍','No inspections','Driver inspections will appear here');
+  html+='<div id="ins-list">'+_renderInsList(ins)+'</div>';
+  return html;
+}
+function _filterIns(){
+  var q=(document.getElementById('ins-search').value||'').toLowerCase();
+  var ins=(_D.inspections||[]).filter(function(i){return !q||(i.VehicleNo||'').toLowerCase().includes(q)||(i.DriverName||'').toLowerCase().includes(q);});
+  var el=document.getElementById('ins-list');if(el)el.innerHTML=_renderInsList(ins);
+}
+function _renderInsList(ins){
+  if(!ins.length)return _emptyState('🔍','No results','Try different search');
+  return ins.slice().reverse().slice(0,50).map(function(i){
+    var ok=Number(i.FailCount||0)===0;
+    return '<div class="list-card"><div class="lc-row">'+
+      '<div style="font-weight:700;color:var(--tx)"><span class="plate-tag">'+_esc(i.VehicleNo||_vehicleNo(i.VehicleID))+'</span></div>'+
+      '<span class="badge '+(ok?'badge-green':'badge-red')+'">'+(ok?'✅ Clear':'⚠️ '+i.FailCount+' Issues')+'</span></div>'+
+      '<div class="lc-meta"><i class="fas fa-id-badge"></i>'+_esc(i.DriverName||_driverName(i.DriverID))+'&nbsp;·&nbsp;<i class="fas fa-calendar"></i>'+_fmtDate(i.Date)+'</div></div>';
+  }).join('');
+}
+
+// ── CLEANING (Admin) ──────────────────────────────────────────────────────────
+function _vCleaning(){
+  var cln=_D.cleaning||[];
+  var html=_ph('Vehicle Cleaning','');
+  html+='<div class="search-bar"><i class="fas fa-search"></i><input id="cln-search" placeholder="Search by vehicle, driver..." oninput="_filterCln()"></div>';
+  if(!cln.length)return html+_emptyState('🧹','No cleaning records','Driver cleaning records will appear here');
+  html+='<div id="cln-list">'+_renderClnList(cln)+'</div>';
+  return html;
+}
+function _filterCln(){
+  var q=(document.getElementById('cln-search').value||'').toLowerCase();
+  var cln=(_D.cleaning||[]).filter(function(c){return !q||(c.VehicleNo||'').toLowerCase().includes(q)||(c.DriverName||'').toLowerCase().includes(q);});
+  var el=document.getElementById('cln-list');if(el)el.innerHTML=_renderClnList(cln);
+}
+function _renderClnList(cln){
+  if(!cln.length)return _emptyState('🔍','No results','Try different search');
+  return cln.slice().reverse().slice(0,50).map(function(c){
+    var ok=Number(c.FailCount||0)===0;
+    return '<div class="list-card"><div class="lc-row">'+
+      '<div style="font-weight:700;color:var(--tx)"><span class="plate-tag">'+_esc(c.VehicleNo||_vehicleNo(c.VehicleID))+'</span></div>'+
+      '<span class="badge '+(ok?'badge-green':'badge-red')+'">'+(ok?'✅ Clean':'⚠️ '+c.FailCount+' Issues')+'</span></div>'+
+      '<div class="lc-meta"><i class="fas fa-id-badge"></i>'+_esc(c.DriverName||_driverName(c.DriverID))+'&nbsp;·&nbsp;<i class="fas fa-calendar"></i>'+_fmtDate(c.Date)+'</div></div>';
+  }).join('');
+}

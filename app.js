@@ -297,6 +297,12 @@ function _refreshData(){
   _fetchFreshData(false);
 }
 
+// Alias used by all CRUD handlers after submit
+function _loadAllData(silent){
+  _lcClearAll(); // clear cache so fresh data loads
+  _fetchFreshData(silent||false);
+}
+
 function _startPoll(){
   if(_pollTimer)clearInterval(_pollTimer);
   _pollTimer=setInterval(function(){
@@ -469,7 +475,7 @@ function _buildMobNav(){
   var items=((APP_CONFIG.MOB_NAV&&APP_CONFIG.MOB_NAV[role])||[]).slice(0,5);
   nav.innerHTML=items.map(function(m){
     var md=(APP_CONFIG.MODULES||{})[m]||{};
-    return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(''+m+'')">'+
+    return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(\''+m+'\')">'+
       '<i class="fas '+(md.icon||'fa-circle')+'"></i>'+
       '<span class="mob-nav-lbl">'+_escInline((md.label||m).split(' ')[0])+'</span></button>';
   }).join('');
@@ -635,7 +641,7 @@ function _vDashboard(){
 
   // Two-col grid: attendance + announcements
   var colStyle=_isMobile()?'display:block':'display:grid;grid-template-columns:1fr 1fr;gap:16px';
-  html+='<div style="'+colStyle+'">';
+  html+='<div style="'+colStyle+'">'; // end two-col
 
   // Today attendance
   html+='<div>';
@@ -939,18 +945,17 @@ function _renderDrvGrid(drv){
     var licD=_daysLeft(String(d.LicenseExpiry||'').slice(0,10));
     var veh=_vehicles().filter(function(v){return String(v.AssignedDriverID||'')===String(d.DriverID||'');});
     return '<div class="driver-card" onclick="openDriverDetail(\''+d.DriverID+'\')">'+
-      '<div class="dc-top" style="background:linear-gradient(135deg,'+col+'22,var(--sur2))"></div>'+
-      '<div style="position:absolute;top:28px;left:14px;width:48px;height:48px;border-radius:12px;border:3px solid var(--sur);'+
-      'background:'+col+';display:flex;align-items:center;justify-content:center;font-weight:900;font-size:17px;color:#fff;box-shadow:0 2px 10px rgba(0,0,0,.15)">'+_initials(d.Name)+'</div>'+
-      '<div class="dc-body">'+
+      '<div class="dc-top">'+
+      '<div class="dc-avatar" style="background:'+col+';width:48px;height:48px;border-radius:12px;font-size:17px;font-weight:900">'+_initials(d.Name)+'</div>'+
+      '<div style="flex:1;min-width:0">'+
       '<div class="dc-name">'+_esc(d.Name)+'</div>'+
       '<div class="dc-meta"><i class="fas fa-phone"></i> '+_esc(d.Mobile)+'</div>'+
-      '<div class="dc-meta" style="margin-top:4px"><i class="fas fa-id-card"></i> '+_esc(d.LicenseNo||'—')+'</div>'+
+      '<div class="dc-meta"><i class="fas fa-id-card"></i> '+_esc(d.LicenseNo||'—')+'</div>'+
       '<div class="dc-foot">'+
       '<span class="badge '+(d.Status==='Active'?'badge-active':'badge-inactive')+'">'+_esc(d.Status)+'</span>'+
       (veh.length?'<span class="pill"><i class="fas fa-car"></i> '+_esc(veh[0].VehicleNo)+'</span>':'')+
-      (licD<30&&licD>=0?'<span class="badge badge-warning">Lic: '+licD+'d</span>':'')+
-      '</div></div></div>';
+      (licD<30&&licD>=0?'<span class="badge badge-warning"><i class="fas fa-id-card"></i> Lic: '+licD+'d</span>':'')+
+      '</div></div></div></div>';
   }).join('');
 }
 function openDriverDetail(dID){

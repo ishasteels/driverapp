@@ -3,7 +3,7 @@
 // Cache-first for app shell, network-pass for GAS API
 // ════════════════════════════════════════════════════════════════════════════
 
-var CACHE = 'ise-driver-v3';
+var CACHE = 'ise-driver-v3-1';
 var STATIC = [
   './',
   './index.html',

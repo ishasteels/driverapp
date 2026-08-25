@@ -394,7 +394,6 @@ function _renderView(view){
         case 'announcements':   c.innerHTML=_vAnnouncements();break;
         case 'analytics':       c.innerHTML=_vAnalytics();setTimeout(_initAnalyticsCharts,100);break;
         case 'payroll':         c.innerHTML=_vPayroll();break;
-        case 'auditlog':        c.innerHTML=_vAuditLog();break;
         case 'users':           c.innerHTML=_vUsers();break;
         case 'settings':        c.innerHTML=_vSettings();break;
         case 'my_dashboard':    c.innerHTML=_vMyDashboard();break;
@@ -2116,7 +2115,38 @@ function _vDispatch(){
   html+='</tbody></table></div>';
   return html;
 }
-function _openAddDispatch(){ _toast('Coming soon','info'); }
+function _openAddDispatch(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var dList=(_D.drivers||[]).filter(function(d){return d.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp-row"><div class="fgrp"><label>Vehicle *</label><select id="dis-veh"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Driver *</label><select id="dis-drv"><option value="">Select</option>'+
+    dList.map(function(d){return'<option value="'+d.DriverID+'">'+_esc(d.Name)+'</option>';}).join('')+'</select></div></div>'+
+    '<div class="fgrp"><label>Customer Name *</label><input id="dis-cust" placeholder="Customer / Party name"></div>'+
+    '<div class="fgrp-row"><div class="fgrp"><label>Material</label><select id="dis-mat"><option value="">Select</option>'+
+    APP_CONFIG.MATERIAL_TYPES.map(function(m){return'<option>'+m+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Weight (MT)</label><input type="number" id="dis-wt" placeholder="e.g. 5.5" step="0.1"></div></div>'+
+    '<div class="fgrp"><label>Invoice No</label><input id="dis-inv" placeholder="e.g. INV-2024-001"></div>'+
+    '<div class="fgrp-row"><div class="fgrp"><label>Loading Date</label><input type="date" id="dis-ld" value="'+_today()+'"></div>'+
+    '<div class="fgrp"><label>Expected Delivery</label><input type="date" id="dis-dd"></div></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddDispatch()"><i class="fas fa-truck"></i> Create Dispatch</button></div>';
+  _modal('New Dispatch Trip',body);
+}
+function submitAddDispatch(){
+  var vID=document.getElementById('dis-veh').value;
+  var dID=document.getElementById('dis-drv').value;
+  var cust=document.getElementById('dis-cust').value.trim();
+  if(!vID||!dID||!cust){_toast('Vehicle, driver aur customer zaroori hain','warn');return;}
+  closeModal();_showLoader('Creating dispatch...');
+  _gas('addDispatch',[{vehicleID:vID,driverID:dID,customerName:cust,
+    material:document.getElementById('dis-mat').value,weight:document.getElementById('dis-wt').value,
+    invoiceNo:document.getElementById('dis-inv').value.trim(),loadingDate:document.getElementById('dis-ld').value,
+    deliveryDate:document.getElementById('dis-dd').value}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Dispatch created ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error||'Failed'),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
 
 function _vServices(){
   var svc=_D.services||[];
@@ -2175,7 +2205,32 @@ function _vDocuments(){
   html+='</tbody></table></div>';
   return html;
 }
-function openAddDoc(){ _toast('Add document form — coming soon','info'); }
+function openAddDoc(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="ad-veh"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp-row"><div class="fgrp"><label>Document Type *</label><select id="ad-type"><option value="">Select</option>'+
+    APP_CONFIG.DOCUMENT_TYPES.map(function(t){return'<option>'+t+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Document Number</label><input id="ad-num" placeholder="e.g. MH-12345678"></div></div>'+
+    '<div class="fgrp-row"><div class="fgrp"><label>Issue Date</label><input type="date" id="ad-iss"></div>'+
+    '<div class="fgrp"><label>Expiry Date</label><input type="date" id="ad-exp"></div></div>'+
+    '<div class="fgrp"><label>Remarks</label><input id="ad-rem" placeholder="Optional remarks"></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddDoc()"><i class="fas fa-plus"></i> Add Document</button></div>';
+  _modal('Add Vehicle Document',body);
+}
+function submitAddDoc(){
+  var vID=document.getElementById('ad-veh').value;
+  var type=document.getElementById('ad-type').value;
+  if(!vID||!type){_toast('Vehicle aur document type zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding...');
+  _gas('addDocument',[{vehicleID:vID,documentType:type,documentNumber:document.getElementById('ad-num').value.trim(),
+    issueDate:document.getElementById('ad-iss').value,expiryDate:document.getElementById('ad-exp').value,
+    remarks:document.getElementById('ad-rem').value.trim()}],function(r){
+    _hideLoader();if(r&&r.success){_toast('Document added ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error||'Failed'),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
 
 function _vReminders(){
   var rem=_D.reminders||[];
@@ -2197,7 +2252,33 @@ function _vReminders(){
   html+='</div>';
   return html;
 }
-function openAddReminder(){ _toast('Add reminder — coming soon','info'); }
+function openAddReminder(){
+  var vList=(_D.vehicles||[]).filter(function(v){return v.Status==='Active';});
+  var body='<div class="form-card" style="border:none;padding:0">'+
+    '<div class="fgrp"><label>Vehicle *</label><select id="ar-veh"><option value="">Select</option>'+
+    vList.map(function(v){return'<option value="'+v.VehicleID+'">'+_esc(v.VehicleNo)+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp-row"><div class="fgrp"><label>Reminder Type *</label><select id="ar-type"><option value="">Select</option>'+
+    APP_CONFIG.REMINDER_TYPES.map(function(t){return'<option>'+t+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Due Date *</label><input type="date" id="ar-date" value="'+_today()+'"></div></div>'+
+    '<div class="fgrp-row"><div class="fgrp"><label>Priority</label><select id="ar-pri">'+
+    APP_CONFIG.PRIORITY_LEVELS.map(function(p){return'<option>'+p+'</option>';}).join('')+'</select></div>'+
+    '<div class="fgrp"><label>Notes</label><input id="ar-notes" placeholder="Optional notes"></div></div>'+
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px" onclick="submitAddReminder()"><i class="fas fa-bell"></i> Add Reminder</button></div>';
+  _modal('Add Reminder',body);
+}
+function submitAddReminder(){
+  var vID=document.getElementById('ar-veh').value;
+  var type=document.getElementById('ar-type').value;
+  var date=document.getElementById('ar-date').value;
+  if(!vID||!type||!date){_toast('Vehicle, type aur date zaroori hain','warn');return;}
+  closeModal();_showLoader('Adding...');
+  _gas('addReminder',[{vehicleID:vID,reminderType:type,reminderDate:date,
+    priority:document.getElementById('ar-pri').value,notes:document.getElementById('ar-notes').value.trim()}],
+    function(r){
+    _hideLoader();if(r&&r.success){_toast('Reminder added ✅','success');_loadAllData(true);}
+    else _toast('Error: '+(r&&r.error||'Failed'),'err');
+  },function(e){_hideLoader();_toast(e.message,'err');});
+}
 function markReminderDone(id){
   _gas('updateReminderStatus',[id,'Completed'],function(r){if(r&&r.success){_toast('Done ✅','success');_loadAllData(true);}});
 }
@@ -2492,22 +2573,7 @@ function _downloadPayrollCSV(){
 }
 
 // ── AUDIT LOG ─────────────────────────────────────────────────────────────────
-function _vAuditLog(){
-  var logs=_D.auditLogs||[];
-  var html=_ph('Audit Log','');
-  if(!logs.length)return html+_emptyState('📝','No audit records','');
-  html+='<div class="card"><div class="audit-list">';
-  logs.slice().reverse().slice(0,100).forEach(function(l){
-    html+='<div class="audit-row">'+
-      '<span class="audit-module">'+_esc(l.Module||'—')+'</span>'+
-      '<span class="audit-action">'+_esc(l.Action||'—')+'</span>'+
-      '<span class="audit-id">'+_esc(l.RecordID||'—')+'</span>'+
-      '<span class="audit-by"><i class="fas fa-user"></i> '+_esc(l.PerformedBy||'—')+'</span>'+
-      '<span class="audit-time">'+_fmtDateTime(l.DateTime)+'</span></div>';
-  });
-  html+='</div></div>';
-  return html;
-}
+function _vAuditLog(){ return ''; }
 
 // ── USERS ─────────────────────────────────────────────────────────────────────
 function _vUsers(){

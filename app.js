@@ -216,7 +216,11 @@ function doLogin(){
     _setLoginBusy(false);
     if(!res||!res.success||!res.user){_showLoginErr((res&&res.error)||'Login failed.');return;}
     _saveSession(res.user);
-    _bootApp(res.user);
+    // Show splash THEN boot
+    if(typeof _spl!=='undefined'&&_spl.show){
+      _spl.show();
+    }
+    setTimeout(function(){_bootApp(res.user);},400);
   },function(err){
     _setLoginBusy(false);
     _showLoginErr(err.message||'Server error. Try again.');
@@ -228,27 +232,52 @@ function doLogin(){
 // ════════════════════════════════════════════════════════════════════════════
 function _bootApp(user){
   _U=user;
+
+  var hasSpl=typeof _spl!=='undefined'&&_spl.progress;
+
+  // Build UI shell (sidebar, nav, profile)
   document.getElementById('sLogin').className='scr';
   document.getElementById('sApp').className='scr on';
   _buildSidebar();
   _buildMobNav();
   _updateSbProfile();
 
-  // ── SPEED: Try localStorage first, show UI instantly ──────────────────
+  if(hasSpl)_spl.progress(40,'Setting up your workspace…');
+
+  // ── SPEED: Try localStorage first ──────────────────
   var cached=_loadLocalData();
+  var startView=_defaultView(user.role);
+
   if(cached){
     _D=cached;
     _dataLoaded=true;
-    var startView=_defaultView(user.role);
-    _loadV(startView);
-    // Background refresh after 800ms
-    setTimeout(function(){_fetchFreshData(true);},800);
+    if(hasSpl)_spl.progress(75,'Loading from cache…');
+    setTimeout(function(){
+      _loadV(startView);
+      if(hasSpl){
+        _spl.progress(95,'All set! Launching dashboard…');
+        setTimeout(function(){
+          _spl.hide(function(){
+            // Background refresh after splash hides
+            setTimeout(function(){_fetchFreshData(true);},600);
+          });
+        },400);
+      } else {
+        setTimeout(function(){_fetchFreshData(true);},800);
+      }
+    },300);
   } else {
-    // No cache — show skeletons, fetch from GAS
-    var startView=_defaultView(user.role);
+    // No cache — load from GAS, show progress
+    if(hasSpl)_spl.progress(50,'Fetching fleet data from server…');
     _loadV(startView);
     _showSkelContent();
-    _fetchFreshData(false);
+    _fetchFreshData(false,function(){
+      // onComplete callback
+      if(hasSpl){
+        _spl.progress(98,'Ready!');
+        setTimeout(function(){_spl.hide();},350);
+      }
+    });
   }
   _startPoll();
 }
@@ -271,7 +300,7 @@ function _saveLocalData(data){
   }catch(e){}
 }
 
-function _fetchFreshData(silent){
+function _fetchFreshData(silent,onComplete){
   if(!_U)return;
   _gas('getAllData',[],function(res){
     if(res&&res.success!==false){
@@ -283,11 +312,13 @@ function _fetchFreshData(silent){
       _checkAnnouncements();
       _updateBadges();
       if(!silent)_hideLoader();
+      if(onComplete)onComplete();
     }
   },function(err){
     if(!silent){
       _toast('Data load failed. Using cached.','warn');
     }
+    if(onComplete)onComplete();
   });
 }
 
@@ -409,11 +440,27 @@ function _showSkelContent(){
 window.addEventListener('load',function(){
   var sess=_loadSession();
   if(sess&&sess.user){
-    _bootApp(sess.user);
+    // Returning user — already logged in, show splash briefly
+    if(typeof _spl!=='undefined'&&_spl.progress){
+      _spl.progress(30,'Welcome back, '+(_escInline((sess.user.name||'').split(' ')[0])||'User')+'! 👋');
+    }
+    setTimeout(function(){_bootApp(sess.user);},500);
   } else {
-    document.getElementById('sLogin').className='scr on';
-    document.documentElement.classList.remove('has-session');
-    var em=document.getElementById('inp-email');if(em)em.focus();
+    // New visitor — hide splash, show login
+    if(typeof _spl!=='undefined'&&_spl.hide){
+      _spl.progress(100,'');
+      setTimeout(function(){
+        _spl.hide(function(){
+          document.getElementById('sLogin').className='scr on';
+          document.documentElement.classList.remove('has-session');
+          var em=document.getElementById('inp-email');if(em)em.focus();
+        });
+      },600);
+    } else {
+      document.getElementById('sLogin').className='scr on';
+      document.documentElement.classList.remove('has-session');
+      var em=document.getElementById('inp-email');if(em)em.focus();
+    }
   }
 });
 

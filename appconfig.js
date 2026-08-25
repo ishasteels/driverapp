@@ -45,7 +45,7 @@ window.APP_CONFIG = {
       'documents','reminders','expenses','fastag','kmlogs','maintenance',
       'penalties','rewards','checklist','checklist_setup','delegation',
       'leave_requests','holidays','announcements','analytics','payroll',
-      'auditlog','users','settings'
+      'users','settings'
     ],
     manager: [
       'dashboard','operations','vehicles','drivers','attendance','muster',
@@ -118,7 +118,7 @@ window.APP_CONFIG = {
       { label:'COMPLIANCE',  items:['attendance','muster','inspection','cleaning','services','documents','reminders','fastag'] },
       { label:'FINANCE',     items:['expenses','penalties','rewards','payroll'] },
       { label:'TEAM',        items:['checklist','checklist_setup','delegation','leave_requests','holidays','announcements'] },
-      { label:'SYSTEM',      items:['users','auditlog','settings'] }
+      { label:'SYSTEM',      items:['users','settings'] }
     ],
     manager: [
       { label:'OVERVIEW',    items:['dashboard','operations','analytics'] },

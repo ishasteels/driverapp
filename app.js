@@ -468,16 +468,23 @@ function _buildSidebar(){
 
 function _buildMobNav(){
   if(!_U)return;
-  // Support both #mobNav direct and #mob-nav-inner wrapper
   var nav=document.getElementById('mob-nav-inner')||document.getElementById('mobNav');
   if(!nav)return;
   var role=_U.role||'driver';
   var items=((APP_CONFIG.MOB_NAV&&APP_CONFIG.MOB_NAV[role])||[]).slice(0,5);
+  // Short labels for bottom nav
+  var shortLabels={
+    dashboard:'Home',operations:'Control',vehicles:'Fleet',
+    attendance:'Attend',settings:'Settings',
+    my_dashboard:'Home',my_attendance:'Attend',my_checklist:'Tasks',
+    my_fuel:'Fuel',profile:'Profile'
+  };
   nav.innerHTML=items.map(function(m){
     var md=(APP_CONFIG.MODULES||{})[m]||{};
+    var lbl=shortLabels[m]||(md.label||m).split(' ')[0];
     return '<button class="mob-nav-btn" data-view="'+m+'" onclick="_loadV(\''+m+'\')">'+
       '<i class="fas '+(md.icon||'fa-circle')+'"></i>'+
-      '<span class="mob-nav-lbl">'+_escInline((md.label||m).split(' ')[0])+'</span></button>';
+      '<span class="mob-nav-lbl">'+_escInline(lbl)+'</span></button>';
   }).join('');
 }
 

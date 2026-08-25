@@ -758,7 +758,7 @@ function _vOperations(){
   }
 
   // Vehicle status grid
-  html+='<div class="sec-hdr"><i class="fas fa-car" style="color:var(--B)"></i>Live Vehicle Status</div>';
+  html+='<div class="sec-hdr"><i class="fas fa-car" style="color:var(--P)"></i>Live Vehicle Status</div>';
   html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px">';
   veh.filter(function(v){return v.Status==='Active';}).forEach(function(v){
     var drv=_driverByID(v.AssignedDriverID);
@@ -1091,6 +1091,16 @@ function _filterAtt(){
 }
 function _renderAttList(att){
   if(!att.length)return _emptyState('📋','No records','No attendance records for this period');
+  if(_isMobile()){
+    return att.slice().reverse().map(function(a){
+      var sCol=a.Status==='Present'?'badge-present':a.Status==='Late'?'badge-late':a.Status==='Half Day'?'badge-hd':'badge-absent';
+      return '<div class="list-card">'+
+        '<div class="lc-row"><b>'+_esc(_driverName(a.DriverID))+'</b><span class="badge '+sCol+'">'+_esc(a.Status)+'</span></div>'+
+        '<div class="lc-meta"><i class="fas fa-calendar"></i>'+_fmtDate(a.Date)+'&nbsp;·&nbsp;IN: <b>'+(_fmtTime(a.InTime)||'—')+'</b>'+(a.OutTime?'&nbsp;·&nbsp;OUT: <b>'+_fmtTime(a.OutTime)+'</b>':'')+'</div>'+
+        (a.TotalHours?'<div class="lc-sub"><i class="fas fa-clock"></i> '+_esc(a.TotalHours)+'</div>':'')+
+        '</div>';
+    }).join('');
+  }
   return '<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
     '<th>Driver</th><th>Date</th><th>IN</th><th>OUT</th><th>Hours</th><th>Status</th><th>GPS</th></tr></thead><tbody>'+
     att.slice().reverse().map(function(a){
@@ -1224,22 +1234,37 @@ function _vFuel(){
     '<div class="fs-item"><div class="fs-label">Avg Mileage</div><div class="fs-val">'+avgM+' km/L</div></div>'+
     '<div class="fs-item"><div class="fs-label">Entries</div><div class="fs-val">'+monFuel.length+'</div></div></div>';
 
-  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
-    '<th>Vehicle</th><th>Driver</th><th>Date</th><th>Qty</th><th>Amount</th><th>Rate</th><th>Mileage</th><th>Pump</th></tr></thead><tbody>';
-  fuel.slice().reverse().slice(0,50).forEach(function(f){
-    var mil=parseFloat(f.Mileage||0);
-    var mCol=mil>0&&mil<6?'color:var(--R);font-weight:800':mil>=12?'color:var(--G)':'';
-    html+='<tr>'+
-      '<td><span class="plate-tag">'+_esc(_vehicleNo(f.VehicleID))+'</span></td>'+
-      '<td>'+_esc(_driverName(f.DriverID))+'</td>'+
-      '<td>'+_fmtDate(f.Date)+'</td>'+
-      '<td>'+_esc(f.FuelQty)+'L</td>'+
-      '<td><b>'+_inr(f.Amount)+'</b></td>'+
-      '<td>₹'+_esc(f.CostPerLiter)+'/L</td>'+
-      '<td style="'+mCol+'">'+(mil>0?mil+' km/L':'—')+'</td>'+
-      '<td style="font-size:12px;color:var(--tx3)">'+_esc(f.PumpName||'—')+'</td></tr>';
-  });
-  html+='</tbody></table></div>';
+  if(_isMobile()){
+    html+='<div style="display:flex;flex-direction:column;gap:8px">';
+    fuel.slice().reverse().slice(0,50).forEach(function(f){
+      var mil=parseFloat(f.Mileage||0);
+      var mCol=mil>0&&mil<6?'var(--R)':mil>=12?'var(--G)':'var(--tx)';
+      html+='<div class="list-card">'+
+        '<div class="lc-row"><span class="plate-tag">'+_esc(_vehicleNo(f.VehicleID))+'</span><b>'+_inr(f.Amount)+'</b></div>'+
+        '<div class="lc-meta"><i class="fas fa-user"></i>'+_esc(_driverName(f.DriverID))+'&nbsp;·&nbsp;<i class="fas fa-calendar"></i>'+_fmtDate(f.Date)+'</div>'+
+        '<div class="lc-meta"><i class="fas fa-gas-pump"></i>'+_esc(f.FuelQty)+'L &nbsp;·&nbsp; ₹'+_esc(f.CostPerLiter)+'/L'+(mil>0?' &nbsp;·&nbsp; <b style="color:'+mCol+'">'+mil+' km/L</b>':'')+'</div>'+
+        (f.PumpName?'<div class="lc-sub"><i class="fas fa-location-dot"></i> '+_esc(f.PumpName)+'</div>':'')+
+        '</div>';
+    });
+    html+='</div>';
+  } else {
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr>'+
+      '<th>Vehicle</th><th>Driver</th><th>Date</th><th>Qty</th><th>Amount</th><th>Rate</th><th>Mileage</th><th>Pump</th></tr></thead><tbody>';
+    fuel.slice().reverse().slice(0,50).forEach(function(f){
+      var mil=parseFloat(f.Mileage||0);
+      var mCol=mil>0&&mil<6?'color:var(--R);font-weight:800':mil>=12?'color:var(--G)':'';
+      html+='<tr>'+
+        '<td><span class="plate-tag">'+_esc(_vehicleNo(f.VehicleID))+'</span></td>'+
+        '<td>'+_esc(_driverName(f.DriverID))+'</td>'+
+        '<td>'+_fmtDate(f.Date)+'</td>'+
+        '<td>'+_esc(f.FuelQty)+'L</td>'+
+        '<td><b>'+_inr(f.Amount)+'</b></td>'+
+        '<td>₹'+_esc(f.CostPerLiter)+'/L</td>'+
+        '<td style="'+mCol+'">'+(mil>0?mil+' km/L':'—')+'</td>'+
+        '<td style="font-size:12px;color:var(--tx3)">'+_esc(f.PumpName||'—')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
   return html;
 }
 function openAddFuel(){
@@ -1620,7 +1645,36 @@ function approveLeave(reqID,decision){
     else _toast('Error: '+(r&&r.error),'err');
   },function(e){_hideLoader();_toast(e.message,'err');});
 }
-function _openAddLeaveApproval(dID){}
+function _openAddLeaveApproval(dID){
+  var drv=_driverByID(dID);if(!drv)return;
+  var leaves=(_D.leaveRequests||[]).filter(function(l){return String(l.driver_id||l.DriverID||'')===String(dID||'');});
+  var pending=leaves.filter(function(l){return l.status==='Pending';});
+  var body='<div style="padding:4px 0 14px">'+
+    '<div style="font-weight:800;font-size:14px;margin-bottom:4px">'+_esc(drv.Name)+'</div>'+
+    '<div style="font-size:12px;color:var(--tx3)">Leave history &amp; approval</div></div>';
+  if(!pending.length&&!leaves.length){
+    body+=_emptyState('📅','No leave requests','This driver has no pending leaves');
+  } else {
+    body+='<div style="display:flex;flex-direction:column;gap:8px">';
+    var toShow=pending.length?pending:leaves.slice(0,5);
+    toShow.forEach(function(l){
+      var sCol=l.status==='Approved'?'badge-approved':l.status==='Rejected'?'badge-rejected':'badge-pending';
+      body+='<div class="leave-card">'+
+        '<div class="leave-head"><div>'+
+        '<div class="leave-type">'+_esc(l.leave_type||l.LeaveType||'—')+'</div>'+
+        '<div class="leave-dates">'+_fmtDate(l.from_date||l.FromDate)+' → '+_fmtDate(l.to_date||l.ToDate)+'</div></div>'+
+        '<span class="badge '+sCol+'">'+_esc(l.status||'—')+'</span></div>'+
+        '<div class="leave-reason">'+_esc(l.reason||l.Reason||'No reason')+'</div>'+
+        (l.status==='Pending'?
+          '<div class="leave-action-row">'+
+          '<button class="btn btn-success btn-sm" onclick="approveLeave(\''+l.request_id+'\',\'Approved\')"><i class="fas fa-check"></i> Approve</button>'+
+          '<button class="btn btn-danger btn-sm" onclick="approveLeave(\''+l.request_id+'\',\'Rejected\')"><i class="fas fa-times"></i> Reject</button></div>':'')+
+        '</div>';
+    });
+    body+='</div>';
+  }
+  _modal('Leave — '+drv.Name, body);
+}
 
 // ── HOLIDAYS ──────────────────────────────────────────────────────────────────
 function _vHolidays(){
@@ -1731,16 +1785,29 @@ function _vPenalties(){
   var pen=_D.penalties||[];
   var html=_ph('Penalties','<button class="btn btn-sm" onclick="_openAddPenalty(\'\')"><i class="fas fa-plus"></i> Add Penalty</button>');
   if(!pen.length)return html+_emptyState('⚠️','No penalties','Clean slate!');
-  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Driver</th><th>Date</th><th>Reason</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>';
-  pen.slice().reverse().forEach(function(p){
-    html+='<tr><td><b>'+_esc(_driverName(p.DriverID))+'</b></td>'+
-      '<td>'+_fmtDate(p.Date)+'</td>'+
-      '<td style="max-width:200px">'+_esc(p.Reason)+'</td>'+
-      '<td><b>'+_inr(p.Amount)+'</b></td>'+
-      '<td><span class="badge '+(p.Status==='Paid'?'badge-approved':'badge-pending')+'">'+_esc(p.Status)+'</span></td>'+
-      '<td>'+(p.Status==='Pending'?'<button class="btn btn-xs btn-ghost" onclick="markPenPaid(\''+p.PenaltyID+'\')">Mark Paid</button>':'')+'</td></tr>';
-  });
-  html+='</tbody></table></div>';
+  if(_isMobile()){
+    html+='<div style="display:flex;flex-direction:column;gap:8px">';
+    pen.slice().reverse().forEach(function(p){
+      html+='<div class="list-card">'+
+        '<div class="lc-row"><b>'+_esc(_driverName(p.DriverID))+'</b><b style="color:var(--R)">'+_inr(p.Amount)+'</b></div>'+
+        '<div class="lc-meta"><i class="fas fa-calendar"></i>'+_fmtDate(p.Date)+'&nbsp;·&nbsp;<span class="badge '+(p.Status==='Paid'?'badge-approved':'badge-pending')+'">'+_esc(p.Status)+'</span></div>'+
+        '<div class="lc-sub">'+_esc(p.Reason)+'</div>'+
+        (p.Status==='Pending'?'<button class="btn btn-xs btn-ghost" style="margin-top:8px" onclick="markPenPaid(\''+p.PenaltyID+'\')"><i class="fas fa-check"></i> Mark Paid</button>':'')+
+        '</div>';
+    });
+    html+='</div>';
+  } else {
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Driver</th><th>Date</th><th>Reason</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+    pen.slice().reverse().forEach(function(p){
+      html+='<tr><td><b>'+_esc(_driverName(p.DriverID))+'</b></td>'+
+        '<td>'+_fmtDate(p.Date)+'</td>'+
+        '<td style="max-width:200px">'+_esc(p.Reason)+'</td>'+
+        '<td><b>'+_inr(p.Amount)+'</b></td>'+
+        '<td><span class="badge '+(p.Status==='Paid'?'badge-approved':'badge-pending')+'">'+_esc(p.Status)+'</span></td>'+
+        '<td>'+(p.Status==='Pending'?'<button class="btn btn-xs btn-ghost" onclick="markPenPaid(\''+p.PenaltyID+'\')">Mark Paid</button>':'')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
   return html;
 }
 function _openAddPenalty(dID){
@@ -1825,14 +1892,26 @@ function _vExpenses(){
     (Object.keys(byType).length?_inr(Math.max.apply(null,Object.values(byType))):'₹0')+'</div></div>'+
     '<div class="fs-item"><div class="fs-label">Avg</div><div class="fs-val">'+(monExp.length?_inr(Math.round(total/monExp.length)):'₹0')+'</div></div></div>';
   if(!exp.length)return html+_emptyState('💸','No expenses','Add expense records');
-  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Date</th><th>Type</th><th>Amount</th><th>Mode</th><th>Remarks</th></tr></thead><tbody>';
-  exp.slice().reverse().slice(0,50).forEach(function(e){
-    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(e.VehicleID))+'</span></td>'+
-      '<td>'+_fmtDate(e.Date)+'</td><td>'+_esc(e.ExpenseType)+'</td>'+
-      '<td><b>'+_inr(e.Amount)+'</b></td><td>'+_esc(e.PaymentMode||'—')+'</td>'+
-      '<td style="font-size:12px;color:var(--tx3)">'+_esc(e.Remarks||'—')+'</td></tr>';
-  });
-  html+='</tbody></table></div>';
+  if(_isMobile()){
+    html+='<div style="display:flex;flex-direction:column;gap:8px">';
+    exp.slice().reverse().slice(0,50).forEach(function(e){
+      html+='<div class="list-card">'+
+        '<div class="lc-row"><span class="plate-tag">'+_esc(_vehicleNo(e.VehicleID))+'</span><b>'+_inr(e.Amount)+'</b></div>'+
+        '<div class="lc-meta"><i class="fas fa-tag"></i>'+_esc(e.ExpenseType)+'&nbsp;·&nbsp;<i class="fas fa-calendar"></i>'+_fmtDate(e.Date)+'&nbsp;·&nbsp;'+_esc(e.PaymentMode||'—')+'</div>'+
+        (e.Remarks?'<div class="lc-sub">'+_esc(e.Remarks)+'</div>':'')+
+        '</div>';
+    });
+    html+='</div>';
+  } else {
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Date</th><th>Type</th><th>Amount</th><th>Mode</th><th>Remarks</th></tr></thead><tbody>';
+    exp.slice().reverse().slice(0,50).forEach(function(e){
+      html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(e.VehicleID))+'</span></td>'+
+        '<td>'+_fmtDate(e.Date)+'</td><td>'+_esc(e.ExpenseType)+'</td>'+
+        '<td><b>'+_inr(e.Amount)+'</b></td><td>'+_esc(e.PaymentMode||'—')+'</td>'+
+        '<td style="font-size:12px;color:var(--tx3)">'+_esc(e.Remarks||'—')+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
   return html;
 }
 function openAddExpense(){
@@ -1869,14 +1948,26 @@ function _vTrips(){
   var trips=_D.trips||[];
   var html=_ph('Vehicle Trips','<button class="btn btn-sm" onclick="openAddTrip()"><i class="fas fa-plus"></i> Add Trip</button>');
   if(!trips.length)return html+_emptyState('🗺️','No trips','Log vehicle trips');
-  html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Driver</th><th>Date</th><th>From</th><th>To</th><th>Material</th><th>KM</th></tr></thead><tbody>';
-  trips.slice().reverse().slice(0,50).forEach(function(t){
-    html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(t.VehicleID))+'</span></td>'+
-      '<td>'+_esc(_driverName(t.DriverID))+'</td><td>'+_fmtDate(t.Date)+'</td>'+
-      '<td>'+_esc(t.FromLocation)+'</td><td>'+_esc(t.ToLocation)+'</td>'+
-      '<td>'+_esc(t.MaterialType||'—')+'</td><td><b>'+_esc(t.TotalKM||0)+' km</b></td></tr>';
-  });
-  html+='</tbody></table></div>';
+  if(_isMobile()){
+    html+='<div style="display:flex;flex-direction:column;gap:8px">';
+    trips.slice().reverse().slice(0,50).forEach(function(t){
+      html+='<div class="list-card">'+
+        '<div class="lc-row"><span class="plate-tag">'+_esc(_vehicleNo(t.VehicleID))+'</span><b>'+_esc(t.TotalKM||0)+' km</b></div>'+
+        '<div class="lc-meta"><i class="fas fa-arrow-right"></i>'+_esc(t.FromLocation)+' → '+_esc(t.ToLocation)+'</div>'+
+        '<div class="lc-meta"><i class="fas fa-user"></i>'+_esc(_driverName(t.DriverID))+'&nbsp;·&nbsp;<i class="fas fa-calendar"></i>'+_fmtDate(t.Date)+(t.MaterialType?'&nbsp;·&nbsp;'+_esc(t.MaterialType):'')+'</div>'+
+        '</div>';
+    });
+    html+='</div>';
+  } else {
+    html+='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Vehicle</th><th>Driver</th><th>Date</th><th>From</th><th>To</th><th>Material</th><th>KM</th></tr></thead><tbody>';
+    trips.slice().reverse().slice(0,50).forEach(function(t){
+      html+='<tr><td><span class="plate-tag">'+_esc(_vehicleNo(t.VehicleID))+'</span></td>'+
+        '<td>'+_esc(_driverName(t.DriverID))+'</td><td>'+_fmtDate(t.Date)+'</td>'+
+        '<td>'+_esc(t.FromLocation)+'</td><td>'+_esc(t.ToLocation)+'</td>'+
+        '<td>'+_esc(t.MaterialType||'—')+'</td><td><b>'+_esc(t.TotalKM||0)+' km</b></td></tr>';
+    });
+    html+='</tbody></table></div>';
+  }
   return html;
 }
 function openAddTrip(){
@@ -2157,7 +2248,7 @@ function _vAnalytics(){
 
   html+='<div class="ana-charts-grid">'+
     '<div class="ana-chart-card ana-wide"><div class="ana-chart-title"><i class="fas fa-chart-line" style="color:var(--P)"></i>Fuel Spend Trend</div><canvas id="chart-fuel" height="80"></canvas></div>'+
-    '<div class="ana-chart-card"><div class="ana-chart-title"><i class="fas fa-chart-pie" style="color:var(--B)"></i>Expense by Type</div><canvas id="chart-exp"></canvas></div>'+
+    '<div class="ana-chart-card"><div class="ana-chart-title"><i class="fas fa-chart-pie" style="color:var(--P)"></i>Expense by Type</div><canvas id="chart-exp"></canvas></div>'+
     '<div class="ana-chart-card"><div class="ana-chart-title"><i class="fas fa-chart-bar" style="color:var(--G)"></i>Mileage by Vehicle</div><canvas id="chart-mil"></canvas></div>'+
     '<div class="ana-chart-card"><div class="ana-chart-title"><i class="fas fa-users" style="color:var(--O)"></i>Attendance %</div><canvas id="chart-att"></canvas></div>'+
     '</div>';
@@ -2469,7 +2560,7 @@ function _vMyDashboard(){
       '<div style="color:var(--G);font-weight:700;font-size:14px">✅ Attendance complete for today</div>':
       hasIN?
       '<div style="color:var(--O);font-weight:700;font-size:14px">🟡 Checked IN · Please mark OUT when leaving</div>'+
-      '<button class="btn btn-wide btn-lg" style="margin-top:10px;background:var(--B)" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>':
+      '<button class="btn btn-wide btn-lg" style="margin-top:10px;background:var(--P)" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>':
       '<div style="color:var(--tx3);font-size:13px;margin-bottom:10px">Not marked yet today</div>'+
       '<button class="btn btn-wide btn-lg" onclick="_markAttendance(\'in\')"><i class="fas fa-right-to-bracket"></i> Mark IN</button>'
     )+'</div>';
@@ -2478,7 +2569,7 @@ function _vMyDashboard(){
   html+='<div class="month-strip">'+
     '<div class="ms-item"><div class="ms-val">'+pDays+'</div><div class="ms-lbl">Present</div></div>'+
     '<div class="ms-item"><div class="ms-val" style="color:var(--O)">'+pendingChk+'</div><div class="ms-lbl">Tasks</div></div>'+
-    '<div class="ms-item"><div class="ms-val" style="color:'+(overdueD?'var(--R)':'var(--B)')+'">'+pendingDel+'</div><div class="ms-lbl">Delegated</div></div>'+
+    '<div class="ms-item"><div class="ms-val" style="color:'+(overdueD?'var(--R)':'var(--P)')+'">'+pendingDel+'</div><div class="ms-lbl">Delegated</div></div>'+
     '<div class="ms-item"><div class="ms-val" style="color:var(--G)">'+(lb.total_available||0)+'</div><div class="ms-lbl">Leave Bal</div></div></div>';
 
   // Big action buttons
@@ -2561,7 +2652,7 @@ function _vMyAttendance(){
       '✅ Complete — IN: '+_fmtTime(t.InTime)+' · OUT: '+_fmtTime(t.OutTime)+' · '+_esc(t.TotalHours||'')+'</div>';
   } else if(hasIN){
     html+='<div style="color:var(--O);font-weight:700;margin-bottom:10px">🟡 Checked IN at '+_fmtTime(todayAtt[0].InTime)+'</div>'+
-      '<button class="btn btn-wide" style="background:var(--B)" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>';
+      '<button class="btn btn-wide" style="background:var(--P)" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>';
   } else {
     html+='<button class="btn btn-wide btn-lg" onclick="_markAttendance(\'in\')"><i class="fas fa-right-to-bracket"></i> Mark IN — '+today+'</button>';
   }
@@ -2909,7 +3000,7 @@ function _vMyTrips(){
   var myVeh=(_D.myVehicle||[])[0];
   var html=_ph('My Trips','');
   html+='<div class="form-card" style="margin-bottom:16px">'+
-    '<div style="font-size:14px;font-weight:800;margin-bottom:12px"><i class="fas fa-route" style="color:var(--B)"></i> Log New Trip</div>'+
+    '<div style="font-size:14px;font-weight:800;margin-bottom:12px"><i class="fas fa-route" style="color:var(--P)"></i> Log New Trip</div>'+
     '<div class="fgrp-row">'+
     '<div class="fgrp"><label>From *</label><input id="mt-from" placeholder="e.g. ISE Depot Rohini"></div>'+
     '<div class="fgrp"><label>To *</label><input id="mt-to" placeholder="e.g. Bhiwadi Plant"></div></div>'+
@@ -2919,7 +3010,7 @@ function _vMyTrips(){
     '<div class="fgrp-row">'+
     '<div class="fgrp"><label>Material</label><select id="mt-mat"><option value="">—</option>'+APP_CONFIG.MATERIAL_TYPES.map(function(m){return'<option>'+m+'</option>';}).join('')+'</select></div>'+
     '<div class="fgrp"><label>Weight (MT)</label><input type="number" id="mt-wt" step="0.1" placeholder="0.0"></div></div>'+
-    '<button class="btn btn-wide btn-lg" style="margin-top:12px;background:var(--B)" onclick="submitMyTrip()"><i class="fas fa-route"></i> Log Trip</button></div>';
+    '<button class="btn btn-wide btn-lg" style="margin-top:12px;background:var(--P)" onclick="submitMyTrip()"><i class="fas fa-route"></i> Log Trip</button></div>';
   if(trips.length){
     html+='<div class="sec-hdr">My Trips</div>';
     html+='<div style="display:flex;flex-direction:column;gap:8px">';

@@ -579,7 +579,7 @@ function _gridCols(mob,tab,desk){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// DASHBOARD VIEW
+// DASHBOARD VIEW — Modern CRM style
 // ════════════════════════════════════════════════════════════════════════════
 function _vDashboard(){
   var veh=_D.vehicles||[];
@@ -590,6 +590,7 @@ function _vDashboard(){
   var dels=_D.delegations||[];
   var anns=_D.announcements||[];
   var cels=_D.celebrations||[];
+  var hols=_D.holidays||[];
   var today=_today();
   var mon=_currMonth();
 
@@ -598,111 +599,164 @@ function _vDashboard(){
   var todayAtt=att.filter(function(a){return String(a.Date||'').slice(0,10)===today;});
   var present=todayAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
   var late=todayAtt.filter(function(a){return a.Status==='Late';}).length;
+  var absent=activeDrv-present;
   var monFuel=fuel.filter(function(f){return String(f.Date||'').startsWith(mon);}).reduce(function(s,f){return s+Number(f.Amount||0);},0);
   var todayFuel=fuel.filter(function(f){return String(f.Date||'').slice(0,10)===today;}).reduce(function(s,f){return s+Number(f.Amount||0);},0);
   var pendingLv=lv.filter(function(l){return String(l.status||'')==='Pending';}).length;
   var overdueDels=dels.filter(function(d){return d.is_overdue;}).length;
 
-  // Alerts
+  // ── Alerts ──
   var alerts=[];
   veh.forEach(function(v){
     var insD=_daysLeft(String(v.InsuranceExpiry||'').slice(0,10));
     var pucD=_daysLeft(String(v.PUCExpiry||'').slice(0,10));
     var ftB=Number(v.FastagBalance||0);
-    if(insD>=0&&insD<=30)alerts.push({type:'ins',vno:v.VehicleNo,days:insD,msg:'Insurance: '+insD+'d baaki',col:insD<7?'var(--R)':'var(--O)',ico:'fa-shield'});
-    if(pucD>=0&&pucD<=15)alerts.push({type:'puc',vno:v.VehicleNo,days:pucD,msg:'PUC: '+pucD+'d baaki',col:'var(--O)',ico:'fa-leaf'});
-    if(ftB<300)alerts.push({type:'ft',vno:v.VehicleNo,bal:ftB,msg:'Fastag low: ₹'+ftB,col:'var(--W)',ico:'fa-tag'});
+    if(insD>=0&&insD<=30)alerts.push({vno:v.VehicleNo,msg:'Insurance '+insD+'d',col:'warn',ico:'fa-shield-halved'});
+    if(pucD>=0&&pucD<=15)alerts.push({vno:v.VehicleNo,msg:'PUC '+pucD+'d',col:'warn',ico:'fa-leaf'});
+    if(ftB<300)alerts.push({vno:v.VehicleNo,msg:'Fastag ₹'+ftB,col:'danger',ico:'fa-tag'});
   });
 
   var html='';
 
-  // Celebrations
+  // ── Celebration banners ──
   cels.forEach(function(c){
     html+='<div class="cel-banner"><span class="cel-icon">'+(c.type==='birthday'?'🎂':'🎉')+'</span>'+
       '<div><div class="cel-name">'+(c.type==='birthday'?'Birthday — ':'Work Anniversary — ')+_esc(c.name)+'</div>'+
-      '<div class="cel-msg">Wishing you a great day!</div></div></div>';
+      '<div class="cel-msg">Wishing you a great day! 🎊</div></div></div>';
   });
 
-  // KPI cards
-  html+='<div class="kpi-grid">'+
-    _kpi('fa-car','#1A73E8',activeVeh,'Active Vehicles','Total fleet')+
-    _kpi('fa-id-badge','#8E44AD',activeDrv,'Active Drivers','On roster')+
-    _kpi('fa-user-check','#2F9E44',present,'Present Today','Out of '+activeDrv)+
-    _kpi('fa-clock','#D97706',late,'Late Today','Late arrivals')+
-    _kpi('fa-gas-pump','#E03131','₹'+_commaNum(todayFuel),'Fuel Today','Spent today')+
-    _kpi('fa-gas-pump','#E67E22','₹'+_commaNum(monFuel),'Fuel This Month','Running total')+
-    _kpi('fa-calendar-xmark','#7048E8',pendingLv,'Leave Pending','Awaiting approval')+
-    _kpi('fa-triangle-exclamation','#E03131',overdueDels,'Overdue Tasks','Action needed')+
-    '</div>';
+  // ── Hero Banner ──
+  var hour=new Date().getHours();
+  var greet=hour<12?'Good Morning':'hour<17'?'Good Afternoon':'Good Evening';
+  if(hour<12)greet='Good Morning';
+  else if(hour<17)greet='Good Afternoon';
+  else greet='Good Evening';
 
-  // Alerts strip
-  if(alerts.length){
-    html+='<div class="alert-card warn" style="margin-bottom:14px">'+
-      '<i class="fas fa-bell"></i>'+
-      '<div><div class="ac-title">Vehicle Alerts ('+alerts.length+')</div>'+
-      alerts.map(function(a){
-        return '<div class="lc-meta" style="margin-top:4px"><i class="fas '+a.ico+'" style="color:'+a.col+'"></i> '+
-          '<b>'+_esc(a.vno)+'</b> '+_esc(a.msg)+'</div>';
-      }).join('')+'</div></div>';
-  }
+  html+='<div class="dash-hero">'+
+    '<div class="dh-left">'+
+    '<div class="dh-greeting">'+greet+'</div>'+
+    '<div class="dh-name">'+_esc(_U?_U.name:'Admin')+'</div>'+
+    '<div class="dh-date"><i class="fas fa-calendar"></i> '+_dayName(today)+', '+_fmtDate(today)+'</div>'+
+    '</div>'+
+    '<div class="dh-right">'+
+    '<div class="dh-stat"><div class="dh-stat-val">'+activeVeh+'</div><div class="dh-stat-lbl">Fleet</div></div>'+
+    '<div class="dh-stat"><div class="dh-stat-val">'+present+'</div><div class="dh-stat-lbl">Present</div></div>'+
+    (pendingLv?'<div class="dh-stat"><div class="dh-stat-val" style="color:#FBBF24">'+pendingLv+'</div><div class="dh-stat-lbl">Leaves</div></div>':'')+
+    '</div></div>';
 
-  // Two-col grid: attendance + announcements
-  var colStyle=_isMobile()?'display:block':'display:grid;grid-template-columns:1fr 1fr;gap:16px';
-  html+='<div style="'+colStyle+'">'; // end two-col
-
-  // Today attendance
-  html+='<div>';
-  html+='<div class="sec-hdr"><span><i class="fas fa-users" style="color:var(--P)"></i> Today\'s Attendance</span></div>';
-  if(!todayAtt.length){
-    html+='<div style="text-align:center;padding:32px 16px;color:var(--tx3);font-size:13px;background:var(--sur2);border-radius:var(--r);border:1.5px solid var(--bdr)">No records yet today.</div>';
-  }else{
-    html+='<div style="background:var(--sur2);border:1.5px solid var(--bdr);border-radius:var(--r);overflow:hidden">';
-    todayAtt.slice(0,8).forEach(function(a){
-      var drvObj=_driverByID(a.DriverID);
-      var nm=drvObj?drvObj.Name:String(a.DriverID||'');
-      var col=a.Status==='Present'?'var(--G)':a.Status==='Late'?'var(--O)':'var(--R)';
-      var bc=a.Status==='Present'?'badge-green':a.Status==='Late'?'badge-yellow':'badge-red';
-      html+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--bdr)">'+
-        '<div style="width:30px;height:30px;border-radius:50%;background:'+_avatarColor(nm)+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800;flex-shrink:0">'+_initials(nm)+'</div>'+
-        '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_esc(nm)+'</div>'+
-        '<div style="font-size:11px;color:var(--tx3)">'+_fmtTime(a.InTime||'')+(a.OutTime?' — '+_fmtTime(a.OutTime):'')+'</div></div>'+
-        '<span class="badge '+bc+'">'+_esc(a.Status||'')+'</span></div>';
+  // ── Alert pills ──
+  if(alerts.length||overdueDels){
+    html+='<div class="alert-strip">';
+    if(overdueDels)html+='<div class="alert-pill danger" onclick="_loadV(\'delegation\')"><i class="fas fa-triangle-exclamation"></i>'+overdueDels+' Overdue Tasks</div>';
+    if(pendingLv)html+='<div class="alert-pill" onclick="_loadV(\'leave_requests\')"><i class="fas fa-calendar-xmark"></i>'+pendingLv+' Leave Pending</div>';
+    alerts.forEach(function(a){
+      html+='<div class="alert-pill '+a.col+'" onclick="_loadV(\'vehicles\')"><i class="fas '+a.ico+'"></i>'+_esc(a.vno)+' — '+_esc(a.msg)+'</div>';
     });
-    if(todayAtt.length>8)html+='<div style="padding:10px 14px;text-align:center;font-size:12px;color:var(--tx3)">+'+( todayAtt.length-8)+' more</div>';
     html+='</div>';
   }
+
+  // ── KPI Cards ──
+  html+='<div class="kpi-grid-2">';
+  html+=_kpi2('fa-car','#2980B9',activeVeh,'Active Vehicles','Total: '+veh.length,'flat');
+  html+=_kpi2('fa-id-badge','#8E44AD',activeDrv,'Active Drivers','On roster','flat');
+  html+=_kpi2('fa-user-check','#2F9E44',present+'/'+activeDrv,'Present Today',(late?late+' late':'On time'),'up');
+  html+=_kpi2('fa-gas-pump','#D51515','₹'+_commaNum(monFuel),'Fuel This Month','Today: ₹'+_commaNum(todayFuel),'warn');
   html+='</div>';
+
+  // ── Main 2-col: attendance + announcements ──
+  html+='<div class="dash-grid">';
+
+  // Today's Attendance
+  html+='<div class="dash-card">';
+  html+='<div class="dash-card-hdr" style="--kc:#2F9E44">'+
+    '<div class="dash-card-title"><i class="fas fa-users"></i>Today\'s Attendance</div>'+
+    '<span class="dash-card-link" onclick="_loadV(\'attendance\')">View All →</span></div>';
+  html+='<div class="dash-card-body">';
+  if(!todayAtt.length){
+    html+='<div style="padding:32px;text-align:center;color:var(--tx3);font-size:13px"><i class="fas fa-user-clock" style="font-size:28px;display:block;margin-bottom:8px;opacity:.3"></i>No records yet today</div>';
+  }else{
+    todayAtt.slice(0,7).forEach(function(a){
+      var drvObj=_driverByID(a.DriverID);
+      var nm=drvObj?drvObj.Name:String(a.DriverID||'');
+      var bc=a.Status==='Present'?'badge-present':a.Status==='Late'?'badge-warning':'badge-absent';
+      html+='<div class="att-row">'+
+        '<div class="att-ava" style="background:'+_avatarColor(nm)+'">'+_initials(nm)+'</div>'+
+        '<div class="att-info">'+
+        '<div class="att-name">'+_esc(nm)+'</div>'+
+        '<div class="att-time"><i class="fas fa-right-to-bracket"></i> '+(_fmtTime(a.InTime)||'—')+(a.OutTime?' &nbsp;<i class="fas fa-right-from-bracket"></i> '+_fmtTime(a.OutTime):'')+'</div>'+
+        '</div>'+
+        '<span class="badge '+bc+'">'+_esc(a.Status)+'</span></div>';
+    });
+    if(todayAtt.length>7){
+      html+='<div style="padding:10px 16px;font-size:12px;color:var(--tx3);text-align:center;cursor:pointer" onclick="_loadV(\'attendance\')">+'+( todayAtt.length-7)+' more drivers</div>';
+    }
+  }
+  html+='</div></div>';
 
   // Announcements
-  html+='<div'+(  _isMobile()?' style="margin-top:16px"':'')+'>';
-  html+='<div class="sec-hdr"><span><i class="fas fa-bullhorn" style="color:var(--V)"></i> Announcements</span></div>';
+  html+='<div>';
+  html+='<div class="dash-card" style="margin-bottom:12px">';
+  html+='<div class="dash-card-hdr" style="--kc:#D51515">'+
+    '<div class="dash-card-title"><i class="fas fa-bullhorn"></i>Announcements</div>'+
+    '<span class="dash-card-link" onclick="openPostAnn()"><i class="fas fa-plus"></i> Post</span></div>';
+  html+='<div class="dash-card-body">';
   if(!anns.length){
-    html+='<div style="text-align:center;padding:32px 16px;color:var(--tx3);font-size:13px;background:var(--sur2);border-radius:var(--r);border:1.5px solid var(--bdr)">No announcements.</div>';
+    html+='<div style="padding:24px;text-align:center;color:var(--tx3);font-size:13px"><i class="fas fa-bullhorn" style="font-size:22px;display:block;margin-bottom:6px;opacity:.3"></i>No announcements</div>';
   }else{
-    anns.slice(0,5).forEach(function(a){
-      var pClass=String(a.Priority||'').toLowerCase()==='urgent'?'urgent':String(a.Priority||'').toLowerCase()==='high'?'high':'normal';
-      html+='<div class="ann-card '+pClass+'">'+
-        '<div class="ann-text">'+_esc(a.Message||a.Announcement||'')+'</div>'+
-        '<div class="ann-meta"><i class="fas fa-user"></i>'+_esc(a.PostedBy||'')+'&nbsp;·&nbsp;<i class="fas fa-calendar"></i>'+_fmtDate(a.Date||a.CreatedAt||'')+'</div></div>';
+    anns.slice(0,3).forEach(function(a){
+      var p=String(a.Priority||a.priority||'Normal').toLowerCase();
+      html+='<div class="ann2 '+p+'">'+
+        '<div class="ann2-text">'+_esc(a.Message||a.Announcement||a.text||'')+'</div>'+
+        '<div class="ann2-meta">'+
+        '<span class="ann2-badge">'+_esc(String(a.Priority||a.priority||'Normal'))+'</span>'+
+        '<i class="fas fa-user"></i>'+_esc(a.PostedBy||a.posted_by_name||'—')+'&nbsp;·&nbsp;'+_fmtDate(a.Date||a.CreatedAt||a.posted_at||'')+'</div></div>';
     });
   }
-  html+='</div>';
-  html+='</div>'; // end two-col
+  html+='</div></div>';
 
   // Upcoming holidays
-  var hols=(_D.holidays||[]).filter(function(h){return _daysLeft(String(h.Date||'').slice(0,10))>=0;}).slice(0,3);
-  if(hols.length){
-    html+='<div class="sec-hdr" style="margin-top:16px"><span><i class="fas fa-calendar-check" style="color:var(--T)"></i> Upcoming Holidays</span></div>';
-    hols.forEach(function(h){
-      var d=_parseAnyDate(String(h.Date||''));
-      html+='<div class="hol-card">'+
-        '<div class="hol-date"><div class="hol-day">'+(d?d.getDate():'?')+'</div><div class="hol-mon">'+(d?MN[d.getMonth()]:'')+'</div></div>'+
-        '<div><div class="hol-name">'+_esc(h.Name||h.HolidayName||'')+'</div>'+
-        '<div class="hol-type">'+_esc(h.Type||'Public Holiday')+'</div></div></div>';
+  var upcoming=hols.filter(function(h){
+    var d=String(h.HolidayDate||h.Date||'').slice(0,10);
+    return d>=today;
+  }).slice(0,3);
+  if(upcoming.length){
+    html+='<div class="dash-card">';
+    html+='<div class="dash-card-hdr" style="--kc:#0D9488">'+
+      '<div class="dash-card-title"><i class="fas fa-umbrella-beach"></i>Upcoming Holidays</div></div>';
+    html+='<div class="hol-list">';
+    upcoming.forEach(function(h){
+      var ds=String(h.HolidayDate||h.Date||'').slice(0,10);
+      var d=_parseAnyDate(ds);
+      var dl=_daysLeft(ds);
+      html+='<div class="hol-row">'+
+        '<div class="hol-badge">'+
+        '<div class="hol-badge-day">'+(d?d.getDate():'?')+'</div>'+
+        '<div class="hol-badge-mon">'+(d?MN[d.getMonth()]:'')+'</div>'+
+        '</div>'+
+        '<div><div class="hol-name2">'+_esc(h.HolidayName||h.Name||'')+'</div>'+
+        '<div class="hol-type2">'+_esc(h.Type||'Public')+'</div></div>'+
+        '<div class="hol-days-left">'+(dl===0?'Today!':dl+'d')+'</div></div>';
     });
+    html+='</div></div>';
   }
+  html+='</div>'; // end right col
+  html+='</div>'; // end dash-grid
 
   return html;
+}
+
+// KPI card v2 helper
+function _kpi2(icon,color,val,label,sub,trend){
+  return '<div class="kpi2" style="--kc:'+color+'">'+
+    '<div class="kpi2-accent"></div>'+
+    '<div class="kpi2-glow"></div>'+
+    '<div class="kpi2-top">'+
+    '<div class="kpi2-ico"><i class="fas '+icon+'"></i></div>'+
+    (trend?'<span class="kpi2-trend '+trend+'">'+(trend==='up'?'↑ Active':trend==='warn'?'Ongoing':'—')+'</span>':'')+
+    '</div>'+
+    '<div class="kpi2-val">'+_esc(String(val))+'</div>'+
+    '<div class="kpi2-lbl">'+_esc(label)+'</div>'+
+    '<div class="kpi2-sub">'+_esc(sub||'')+'</div></div>';
 }
 function _vOperations(){
   var veh=_D.vehicles||[];var drv=_D.drivers||[];
@@ -953,16 +1007,18 @@ function _renderDrvGrid(drv){
     var veh=_vehicles().filter(function(v){return String(v.AssignedDriverID||'')===String(d.DriverID||'');});
     return '<div class="driver-card" onclick="openDriverDetail(\''+d.DriverID+'\')">'+
       '<div class="dc-top">'+
-      '<div class="dc-avatar" style="background:'+col+';width:48px;height:48px;border-radius:12px;font-size:17px;font-weight:900">'+_initials(d.Name)+'</div>'+
+      '<div class="dc-avatar" style="background:'+col+';width:48px;height:48px;border-radius:12px;font-size:17px;font-weight:900;flex-shrink:0">'+_initials(d.Name)+'</div>'+
       '<div style="flex:1;min-width:0">'+
       '<div class="dc-name">'+_esc(d.Name)+'</div>'+
-      '<div class="dc-meta"><i class="fas fa-phone"></i> '+_esc(d.Mobile)+'</div>'+
-      '<div class="dc-meta"><i class="fas fa-id-card"></i> '+_esc(d.LicenseNo||'—')+'</div>'+
+      '<a href="tel:'+_esc(d.Mobile)+'" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;color:#D51515;text-decoration:none;margin-top:3px;padding:3px 9px;border-radius:999px;background:rgba(213,21,21,.08);border:1px solid rgba(213,21,21,.18);">'+
+      '<i class="fas fa-phone"></i> '+_esc(d.Mobile||'—')+'</a>'+
+      '<div class="dc-meta" style="margin-top:5px"><i class="fas fa-id-card"></i> '+_esc(d.LicenseNo||'—')+'</div>'+
+      '</div></div>'+
       '<div class="dc-foot">'+
       '<span class="badge '+(d.Status==='Active'?'badge-active':'badge-inactive')+'">'+_esc(d.Status)+'</span>'+
       (veh.length?'<span class="pill"><i class="fas fa-car"></i> '+_esc(veh[0].VehicleNo)+'</span>':'')+
       (licD<30&&licD>=0?'<span class="badge badge-warning"><i class="fas fa-id-card"></i> Lic: '+licD+'d</span>':'')+
-      '</div></div></div></div>';
+      '</div></div>';
   }).join('');
 }
 function openDriverDetail(dID){
@@ -2428,20 +2484,23 @@ function _vUsers(){
   var users=_D.users||[];
   var html=_ph('User Management','<button class="btn btn-sm" onclick="openAddUser()"><i class="fas fa-plus"></i> Add User</button>');
   if(!users.length)return html+_emptyState('👥','No users','');
+  var roleCols={admin:'#D51515',Admin:'#D51515',manager:'#8E44AD',Manager:'#8E44AD',driver:'#2980B9',Driver:'#2980B9'};
   users.forEach(function(u){
     var col=_avatarColor(u.Name||'');
-    var rBadge=u.Role==='Admin'?'badge-admin':u.Role==='Manager'?'badge-manager':'badge-driver';
+    var rCol=roleCols[u.Role]||'#7F8C8D';
     html+='<div class="user-card">'+
       '<div class="uc-avatar" style="background:'+col+'">'+_initials(u.Name||'?')+'</div>'+
       '<div class="uc-info">'+
       '<div class="uc-name">'+_esc(u.Name)+'</div>'+
-      '<div class="uc-meta">'+_esc(u.Email)+' &nbsp;·&nbsp; '+_esc(u.Mobile||'—')+'</div>'+
-      '<div style="margin-top:4px"><span class="badge '+rBadge+'">'+_esc(u.Role)+'</span>'+
-      (u.Status!=='Active'?'<span class="badge badge-inactive" style="margin-left:4px">Inactive</span>':'')+'</div>'+
-      '<div class="uc-perms">'+_esc(u.Permissions||'—')+'</div></div>'+
-      '<div style="display:flex;flex-direction:column;gap:4px">'+
-      (u.Status==='Active'?'<button class="btn btn-xs btn-ghost" onclick="toggleUserStatus(\''+u.UserID+'\',\'Inactive\')">Disable</button>':
-        '<button class="btn btn-xs btn-outline" onclick="toggleUserStatus(\''+u.UserID+'\',\'Active\')">Enable</button>')+
+      '<div class="uc-meta">'+_esc(u.Email)+'</div>'+
+      (u.Mobile?'<a href="tel:'+_esc(u.Mobile)+'" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;color:#D51515;text-decoration:none;margin-top:4px;padding:2px 8px;border-radius:999px;background:rgba(213,21,21,.08);border:1px solid rgba(213,21,21,.18)"><i class="fas fa-phone"></i>'+_esc(u.Mobile)+'</a>':'') +
+      '<div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap">'+
+      '<span class="badge" style="background:'+rCol+'22;color:'+rCol+'">'+_esc(u.Role)+'</span>'+
+      '<span class="badge '+(u.Status==='Active'?'badge-active':'badge-inactive')+'">'+_esc(u.Status)+'</span>'+
+      '</div></div>'+
+      '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0">'+
+      (u.Status==='Active'?'<button class="btn btn-xs btn-ghost" onclick="toggleUserStatus(\''+u.UserID+'\',\'Inactive\')"><i class="fas fa-ban"></i> Disable</button>':
+        '<button class="btn btn-xs" onclick="toggleUserStatus(\''+u.UserID+'\',\'Active\')"><i class="fas fa-check"></i> Enable</button>')+
       '</div></div>';
   });
   return html;
@@ -2514,6 +2573,7 @@ function _vMyDashboard(){
   var myDel=_D.myDelegations||[];
   var cels=_D.celebrations||[];
   var anns=_D.announcements||[];
+  var hols=_D.holidays||[];
   var today=_today();
   var lb=_D.leaveBalance||{};
 
@@ -2523,21 +2583,20 @@ function _vMyDashboard(){
   var mon=today.slice(0,7);
   var monAtt=myAtt.filter(function(a){return String(a.Date||'').slice(0,10).startsWith(mon);});
   var pDays=monAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
-
   var pendingChk=myChk.filter(function(c){return c.status==='Pending';}).length;
   var pendingDel=myDel.filter(function(d){return d.status==='Pending';}).length;
   var overdueD=myDel.filter(function(d){return d.is_overdue;}).length;
 
   var html='';
 
-  // Celebration banners
+  // ── Celebration banners ──
   cels.forEach(function(c){
     html+='<div class="cel-banner"><div class="cel-icon">'+(c.type==='birthday'?'🎂':'🏢')+'</div>'+
-      '<div class="cel-msg"><div class="cel-name">Happy '+(c.type==='birthday'?'Birthday':'Work Anniversary')+' '+_esc(c.name)+'!</div>'+
-      '<div class="cel-sub">From Team ISE 🎉</div></div></div>';
+      '<div class="cel-msg"><div class="cel-name">Happy '+(c.type==='birthday'?'Birthday':'Work Anniversary')+', '+_esc(c.name)+'! 🎉</div>'+
+      '<div class="cel-sub">From Team ISE</div></div></div>';
   });
 
-  // My vehicle card
+  // ── My vehicle hero card ──
   if(myVeh){
     var insD=_daysLeft(String(myVeh.InsuranceExpiry||'').slice(0,10));
     var pucD=_daysLeft(String(myVeh.PUCExpiry||'').slice(0,10));
@@ -2548,69 +2607,114 @@ function _vMyDashboard(){
       '<div class="mvc-brand">'+_esc((myVeh.Brand||'')+' '+(myVeh.Model||''))+'</div>'+
       '<div class="mvc-meta">'+
       '<span class="mvc-tag">'+_esc(myVeh.FuelType||'')+'</span>'+
+      '<span class="mvc-tag">'+_esc(myVeh.VehicleType||'')+'</span>'+
       (insD<30&&insD>=0?'<span class="mvc-tag" style="background:rgba(231,76,60,.3);color:#ffaaaa">Ins: '+insD+'d</span>':'')+
       (pucD<15&&pucD>=0?'<span class="mvc-tag" style="background:rgba(231,76,60,.3);color:#ffaaaa">PUC: '+pucD+'d</span>':'')+
       '</div></div>'+
       '<div class="mvc-right">'+
       '<div class="mvc-km">'+Number(myVeh.CurrentKM||0).toLocaleString('en-IN')+'</div>'+
       '<div class="mvc-km-lbl">Current KM</div>'+
-      '<div class="mvc-fastag" style="margin-top:8px">🏷️ ₹'+Number(myVeh.FastagBalance||0)+'</div></div>'+
-      '</div></div>';
+      '<div class="mvc-fastag">🏷️ ₹'+Number(myVeh.FastagBalance||0)+'</div>'+
+      '</div></div></div>';
   } else {
-    html+='<div class="alert-card info"><b>No vehicle assigned</b><br>Manager se contact karo.</div>';
+    html+='<div class="alert-card info" style="margin-bottom:14px"><i class="fas fa-info-circle"></i>'+
+      '<div><b>No vehicle assigned</b><br>Manager se contact karo.</div></div>';
   }
 
-  // Today's attendance status
-  html+='<div class="card" style="margin-bottom:14px">'+
-    '<div style="font-size:13px;font-weight:800;color:var(--tx2);margin-bottom:12px"><i class="fas fa-calendar-check"></i> Today\'s Attendance</div>'+
-    (hasIN&&hasOUT?
-      '<div style="color:var(--G);font-weight:700;font-size:14px">✅ Attendance complete for today</div>':
-      hasIN?
-      '<div style="color:var(--O);font-weight:700;font-size:14px">🟡 Checked IN · Please mark OUT when leaving</div>'+
-      '<button class="btn btn-wide btn-lg" style="margin-top:10px;background:var(--P)" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>':
-      '<div style="color:var(--tx3);font-size:13px;margin-bottom:10px">Not marked yet today</div>'+
-      '<button class="btn btn-wide btn-lg" onclick="_markAttendance(\'in\')"><i class="fas fa-right-to-bracket"></i> Mark IN</button>'
-    )+'</div>';
+  // ── Today's Attendance Card ──
+  html+='<div class="att-today-card">';
+  html+='<div class="atc-header">'+
+    '<i class="fas fa-calendar-check" style="color:var(--G);font-size:18px"></i>'+
+    '<div class="atc-title">Today\'s Attendance</div>'+
+    (hasIN&&hasOUT?'<span class="atc-status done">✅ Complete</span>':
+     hasIN?'<span class="atc-status in">🟡 Checked IN</span>':
+     '<span class="atc-status pending">Not marked</span>')+
+    '</div>';
+  if(hasIN&&hasOUT){
+    var t=todayAtt[0];
+    html+='<div class="atc-done"><i class="fas fa-check-circle" style="color:var(--G);font-size:18px"></i>'+
+      'IN: <b>'+_fmtTime(t.InTime)+'</b> &nbsp;&nbsp; OUT: <b>'+_fmtTime(t.OutTime)+'</b>'+
+      (t.TotalHours?' &nbsp;&nbsp; Hours: <b>'+_esc(t.TotalHours)+'</b>':'')+'</div>';
+  } else if(hasIN){
+    html+='<div class="atc-btn-row">'+
+      '<button class="atc-btn mark-out" onclick="_markAttendance(\'out\')"><i class="fas fa-right-from-bracket"></i> Mark OUT</button>'+
+      '</div>';
+  } else {
+    html+='<div class="atc-btn-row">'+
+      '<button class="atc-btn mark-in" onclick="_markAttendance(\'in\')"><i class="fas fa-right-to-bracket"></i> Mark IN</button>'+
+      '</div>';
+  }
+  html+='</div>';
 
-  // Stats strip
-  html+='<div class="month-strip">'+
-    '<div class="ms-item"><div class="ms-val">'+pDays+'</div><div class="ms-lbl">Present</div></div>'+
-    '<div class="ms-item"><div class="ms-val" style="color:var(--O)">'+pendingChk+'</div><div class="ms-lbl">Tasks</div></div>'+
-    '<div class="ms-item"><div class="ms-val" style="color:'+(overdueD?'var(--R)':'var(--P)')+'">'+pendingDel+'</div><div class="ms-lbl">Delegated</div></div>'+
-    '<div class="ms-item"><div class="ms-val" style="color:var(--G)">'+(lb.total_available||0)+'</div><div class="ms-lbl">Leave Bal</div></div></div>';
+  // ── Month stats strip ──
+  html+='<div class="stat-strip">'+
+    '<div class="stat-item"><div class="stat-val">'+pDays+'</div><div class="stat-lbl">Present</div></div>'+
+    '<div class="stat-item"><div class="stat-val" style="color:var(--O)">'+pendingChk+'</div><div class="stat-lbl">Tasks</div></div>'+
+    '<div class="stat-item"><div class="stat-val" style="color:'+(overdueD?'var(--R)':'var(--P)')+'">'+pendingDel+'</div><div class="stat-lbl">Delegated</div></div>'+
+    '<div class="stat-item"><div class="stat-val" style="color:var(--G)">'+(lb.total_available||0)+'</div><div class="stat-lbl">Leave Bal</div></div>'+
+    '</div>';
 
-  // Big action buttons
-  html+='<div class="big-actions">'+
-    '<button class="ba-btn" style="--kc:#D51515" onclick="_loadV(\'my_inspection\')"><div class="ba-icon">🔍</div><div class="ba-label">Inspection</div></button>'+
-    '<button class="ba-btn" style="--kc:#16A085" onclick="_loadV(\'my_cleaning\')"><div class="ba-icon">🧽</div><div class="ba-label">Cleaning</div></button>'+
-    '<button class="ba-btn" style="--kc:#E67E22" onclick="_loadV(\'my_fuel\')"><div class="ba-icon">⛽</div><div class="ba-label">Fuel</div></button>'+
-    '<button class="ba-btn" style="--kc:#2980B9" onclick="_loadV(\'my_trips\')"><div class="ba-icon">🗺️</div><div class="ba-label">Trip</div></button>'+
-    '<button class="ba-btn" style="--kc:#E74C3C" onclick="_loadV(\'my_expenses\')"><div class="ba-icon">💸</div><div class="ba-label">Expense</div></button>'+
-    '<button class="ba-btn" style="--kc:#8E44AD" onclick="_loadV(\'my_kmlogs\')"><div class="ba-icon">📏</div><div class="ba-label">KM Log</div></button></div>';
+  // ── Quick Actions ──
+  html+='<div class="sec-hdr"><i class="fas fa-bolt" style="color:var(--O)"></i>Quick Actions</div>';
+  html+='<div class="qa-grid">'+
+    '<button class="qa-btn" style="--kc:#D51515" onclick="_loadV(\'my_inspection\')"><div class="qa-ico"><i class="fas fa-magnifying-glass"></i></div><div class="qa-lbl">Inspection</div></button>'+
+    '<button class="qa-btn" style="--kc:#16A085" onclick="_loadV(\'my_cleaning\')"><div class="qa-ico"><i class="fas fa-broom"></i></div><div class="qa-lbl">Cleaning</div></button>'+
+    '<button class="qa-btn" style="--kc:#E67E22" onclick="_loadV(\'my_fuel\')"><div class="qa-ico"><i class="fas fa-gas-pump"></i></div><div class="qa-lbl">Fuel Entry</div></button>'+
+    '<button class="qa-btn" style="--kc:#2980B9" onclick="_loadV(\'my_trips\')"><div class="qa-ico"><i class="fas fa-route"></i></div><div class="qa-lbl">Log Trip</div></button>'+
+    '<button class="qa-btn" style="--kc:#E74C3C" onclick="_loadV(\'my_expenses\')"><div class="qa-ico"><i class="fas fa-receipt"></i></div><div class="qa-lbl">Expenses</div></button>'+
+    '<button class="qa-btn" style="--kc:#8E44AD" onclick="_loadV(\'my_kmlogs\')"><div class="qa-ico"><i class="fas fa-gauge-high"></i></div><div class="qa-lbl">KM Log</div></button>'+
+    '</div>';
 
-  // Today's checklist preview
+  // ── Today's Checklist preview ──
   if(myChk.length){
     html+='<div class="sec-hdr"><i class="fas fa-list-check" style="color:var(--T)"></i>Today\'s Checklist</div>';
-    html+='<div class="daily-checklist">';
+    html+='<div class="dash-card">';
     myChk.slice(0,4).forEach(function(c){
       var done=c.status==='Done';var taken=c.isTaken;
-      html+='<button class="daily-step'+(done?' is-done':'')+'" onclick="_loadV(\'my_checklist\')" style="cursor:pointer">'+
+      html+='<button class="daily-step'+(done?' is-done':taken?' taken':'')+'" onclick="_loadV(\'my_checklist\')">'+
         '<span>'+(done?'✅':taken?'🔄':'🔲')+'</span>'+
         '<b>'+_esc(c.taskName)+(c.taskType==='Shared'?'<span class="shared-badge">Shared</span>':'')+'</b>'+
         '<em>'+(done?'Done by '+_esc(c.claimedByName):taken?'Claimed by '+_esc(c.claimedByName):'⏳ '+_esc(c.plannedTime))+'</em></button>';
     });
-    if(myChk.length>4)html+='<div style="font-size:12px;color:var(--P);cursor:pointer;padding:8px 14px" onclick="_loadV(\'my_checklist\')">View all '+myChk.length+' tasks →</div>';
+    if(myChk.length>4){
+      html+='<div style="padding:8px 14px 12px;font-size:12px;color:#D51515;cursor:pointer;font-weight:700" onclick="_loadV(\'my_checklist\')">View all '+myChk.length+' tasks →</div>';
+    }
     html+='</div>';
   }
 
-  // Announcements
+  // ── Announcements ──
   if(anns.length){
     html+='<div class="sec-hdr"><i class="fas fa-bullhorn" style="color:var(--P)"></i>Announcements</div>';
+    html+='<div class="dash-card">';
     anns.slice(0,2).forEach(function(a){
-      html+='<div class="ann-card '+(a.priority||'Normal').toLowerCase()+'">'+
-        '<div class="ann-text">'+_esc(a.text)+'</div>'+
-        '<div class="ann-meta"><i class="fas fa-user"></i>'+_esc(a.posted_by_name)+'</div></div>';
+      var p=String(a.priority||a.Priority||'Normal').toLowerCase();
+      html+='<div class="ann2 '+p+'">'+
+        '<div class="ann2-text">'+_esc(a.text||a.Message||'')+'</div>'+
+        '<div class="ann2-meta"><span class="ann2-badge">'+_esc(String(a.priority||a.Priority||'Normal'))+'</span>'+
+        _esc(a.posted_by_name||a.PostedBy||'')+'</div></div>';
     });
+    html+='</div>';
+  }
+
+  // ── Upcoming holidays ──
+  var upcoming=hols.filter(function(h){
+    var d=String(h.HolidayDate||h.Date||'').slice(0,10);return d>=today;
+  }).slice(0,2);
+  if(upcoming.length){
+    html+='<div class="sec-hdr"><i class="fas fa-umbrella-beach" style="color:var(--T)"></i>Upcoming Holidays</div>';
+    html+='<div class="dash-card"><div class="hol-list">';
+    upcoming.forEach(function(h){
+      var ds=String(h.HolidayDate||h.Date||'').slice(0,10);
+      var d=_parseAnyDate(ds);var dl=_daysLeft(ds);
+      html+='<div class="hol-row">'+
+        '<div class="hol-badge">'+
+        '<div class="hol-badge-day">'+(d?d.getDate():'?')+'</div>'+
+        '<div class="hol-badge-mon">'+(d?MN[d.getMonth()]:'')+'</div></div>'+
+        '<div><div class="hol-name2">'+_esc(h.HolidayName||h.Name||'')+'</div>'+
+        '<div class="hol-type2">'+_esc(h.Type||'Public')+'</div></div>'+
+        '<div class="hol-days-left">'+(dl===0?'Today!':dl+'d')+'</div></div>';
+    });
+    html+='</div></div>';
   }
 
   return html;

@@ -3251,33 +3251,141 @@ function submitMyKMLog(){
 // ── PROFILE ────────────────────────────────────────────────────────────────────
 function _vProfile(){
   if(!_U)return'';
-  var col=_avatarColor(_U.name||'');
-  var lb=_D.leaveBalance||{};
-  var html='<div class="settings-profile">'+
-    '<div class="sp-avatar" style="background:rgba(255,255,255,.2)">'+_initials(_U.name||'')+'</div>'+
-    '<div><div class="sp-name">'+_esc(_U.name)+'</div>'+
-    '<div class="sp-email">'+_esc(_U.email)+'</div>'+
-    '<div style="margin-top:6px;font-size:12px;opacity:.8">'+_esc(_U.mobile||'')+'</div></div></div>';
-
   var myDrv=(_D.myDriver||[])[0]||{};
-  html+='<div class="detail-grid">'+
-    _dr('Driver ID',myDrv.DriverID||'—')+_dr('Blood Group',myDrv.BloodGroup||'—')+
-    _dr('Joining Date',_fmtDate(myDrv.JoiningDate))+_dr('License',myDrv.LicenseNo||'—')+
-    _dr('License Expiry',_fmtDate(myDrv.LicenseExpiry))+_dr('Week Off',myDrv.WeekOffDay||'Sunday')+
+  var lb=_D.leaveBalance||{};
+  var myAtt=_D.myAttendance||[];
+  var myFuel=_D.myFuel||[];
+  var today=_today();
+  var mon=today.slice(0,7);
+
+  // Stats
+  var monAtt=myAtt.filter(function(a){return String(a.Date||'').slice(0,10).startsWith(mon);});
+  var present=monAtt.filter(function(a){return a.Status==='Present'||a.Status==='Late';}).length;
+  var monFuel=myFuel.filter(function(f){return String(f.Date||'').startsWith(mon);}).reduce(function(s,f){return s+Number(f.Amount||0);},0);
+
+  // Photo — try multiple possible keys from sheet
+  var photo=myDrv.Photo||myDrv.PhotoURL||myDrv.photo_url||myDrv.ImageURL||myDrv.image_url||'';
+  var col=_avatarColor(_U.name||'');
+  var licD=myDrv.LicenseExpiry?_daysLeft(String(myDrv.LicenseExpiry).slice(0,10)):-1;
+
+  // ── Hero card ──
+  var html='<div class="prof-hero">'+
+    '<div class="prof-hero-bg"></div>'+
+    '<div class="prof-hero-inner">'+
+    // Photo / Avatar
+    '<div class="prof-photo-wrap">'+
+    (photo?
+      '<img src="'+_esc(photo)+'" class="prof-photo" alt="'+_esc(_U.name)+'"'+
+      ' onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">'+
+      '<div class="prof-ava" style="background:'+col+';display:none">'+_initials(_U.name||'')+'</div>':
+      '<div class="prof-ava" style="background:'+col+'">'+_initials(_U.name||'')+'</div>'
+    )+
+    '</div>'+
+    '<div class="prof-info">'+
+    '<div class="prof-name">'+_esc(_U.name||'—')+'</div>'+
+    '<div class="prof-role"><i class="fas fa-id-badge"></i> Driver</div>'+
+    '<div class="prof-contacts">'+
+    (_U.email?'<a href="mailto:'+_esc(_U.email)+'" class="prof-contact-chip"><i class="fas fa-envelope"></i>'+_esc(_U.email)+'</a>':'')+
+    (_U.mobile||myDrv.Mobile?'<a href="tel:'+_esc(_U.mobile||myDrv.Mobile)+'" class="prof-contact-chip prof-contact-phone"><i class="fas fa-phone"></i>'+_esc(_U.mobile||myDrv.Mobile||'')+'</a>':'')+
+    '</div>'+
+    '</div>'+
+    '</div></div>';
+
+  // ── This month stats ──
+  html+='<div class="prof-stats">'+
+    '<div class="prof-stat"><div class="prof-stat-val">'+present+'</div><div class="prof-stat-lbl">Present<br>This Month</div></div>'+
+    '<div class="prof-stat-div"></div>'+
+    '<div class="prof-stat"><div class="prof-stat-val">'+(lb.total_available||0)+'</div><div class="prof-stat-lbl">Leave<br>Balance</div></div>'+
+    '<div class="prof-stat-div"></div>'+
+    '<div class="prof-stat"><div class="prof-stat-val">₹'+_commaNum(monFuel)+'</div><div class="prof-stat-lbl">Fuel<br>This Month</div></div>'+
     '</div>';
 
-  html+='<div class="sec-hdr">Leave Balance</div>'+
-    '<div class="leave-balance">'+
-    '<div class="lb-item"><div class="lb-num lb-cl">'+lb.casual_leave+'</div><div class="lb-lbl">Casual</div></div>'+
-    '<div class="lb-item"><div class="lb-num lb-sl">'+lb.sick_leave+'</div><div class="lb-lbl">Sick</div></div>'+
-    '<div class="lb-item"><div class="lb-num lb-pl">'+lb.paid_leave+'</div><div class="lb-lbl">Paid</div></div></div>';
+  // ── Driver Details ──
+  html+='<div class="sec-hdr"><i class="fas fa-id-card" style="color:var(--P)"></i> Driver Info</div>';
+  html+='<div class="prof-detail-grid">';
 
+  var rows=[
+    {ico:'fa-hashtag',lbl:'Driver ID',val:myDrv.DriverID||'—'},
+    {ico:'fa-tint',lbl:'Blood Group',val:myDrv.BloodGroup||'—',
+     extra:myDrv.BloodGroup?'<span class="badge" style="background:var(--Rl);color:var(--R);margin-left:6px">'+_esc(myDrv.BloodGroup)+'</span>':''},
+    {ico:'fa-calendar-plus',lbl:'Joining Date',val:_fmtDate(myDrv.JoiningDate)||'—'},
+    {ico:'fa-id-card',lbl:'License No',val:myDrv.LicenseNo||'—'},
+    {ico:'fa-calendar-xmark',lbl:'License Expiry',
+     val:_fmtDate(myDrv.LicenseExpiry)||'—',
+     warn:licD>=0&&licD<=30,
+     extra:licD>=0&&licD<=30?'<span class="badge badge-warning" style="margin-left:6px">'+licD+'d left</span>':''},
+    {ico:'fa-umbrella-beach',lbl:'Week Off',val:myDrv.WeekOffDay||'Sunday'},
+  ];
+
+  rows.forEach(function(r){
+    html+='<div class="prof-dr">'+
+      '<div class="prof-dr-lbl"><i class="fas '+r.ico+'"></i> '+r.lbl+'</div>'+
+      '<div class="prof-dr-val'+(r.warn?' warn':'')+'">'+_esc(r.val)+(r.extra||'')+'</div>'+
+      '</div>';
+  });
+  html+='</div>';
+
+  // ── Leave Balance ──
+  html+='<div class="sec-hdr"><i class="fas fa-calendar-check" style="color:var(--G)"></i> Leave Balance</div>';
+  html+='<div class="prof-leave-grid">'+
+    _profLeave('Casual','fa-mug-hot','#D51515',lb.casual_leave)+
+    _profLeave('Sick','fa-kit-medical','#D97706',lb.sick_leave)+
+    _profLeave('Paid','fa-money-bill','#2F9E44',lb.paid_leave)+
+    _profLeave('Total','fa-calculator','#7048E8',lb.total_available)+
+    '</div>';
+
+  // ── Quick actions ──
+  html+='<div class="sec-hdr"><i class="fas fa-bolt" style="color:var(--O)"></i> Quick Actions</div>';
   html+='<div class="settings-list">'+
-    '<div class="setting-row" onclick="_changePassword()"><div class="sr-icon"><i class="fas fa-lock"></i></div><div class="sr-label">Change Password</div><i class="fas fa-chevron-right sr-arrow"></i></div>'+
-    '<div class="setting-row" onclick="toggleDark()"><div class="sr-icon"><i class="fas fa-moon"></i></div><div class="sr-label">Dark Mode</div></div></div>';
+    '<div class="setting-row" onclick="_loadV(\'my_leave\')">'+
+      '<div class="sr-icon" style="background:rgba(47,158,68,.10);color:#2F9E44"><i class="fas fa-calendar-plus"></i></div>'+
+      '<div class="sr-info"><div class="sr-label">Apply for Leave</div><div class="sr-sub">CL / SL / PL / LWP</div></div>'+
+      '<i class="fas fa-chevron-right sr-arrow"></i></div>'+
+    '<div class="setting-row" onclick="_loadV(\'my_attendance\')">'+
+      '<div class="sr-icon" style="background:rgba(41,128,185,.10);color:#2980B9"><i class="fas fa-clock"></i></div>'+
+      '<div class="sr-info"><div class="sr-label">My Attendance</div><div class="sr-sub">View full history</div></div>'+
+      '<i class="fas fa-chevron-right sr-arrow"></i></div>'+
+    '<div class="setting-row" onclick="_loadV(\'my_expenses\')">'+
+      '<div class="sr-icon" style="background:rgba(231,76,60,.10);color:#E74C3C"><i class="fas fa-receipt"></i></div>'+
+      '<div class="sr-info"><div class="sr-label">My Expenses</div><div class="sr-sub">View & add expenses</div></div>'+
+      '<i class="fas fa-chevron-right sr-arrow"></i></div>'+
+    '</div>';
 
-  html+='<button class="btn btn-wide btn-danger" style="margin-top:20px" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i> Logout</button>';
+  // ── Settings ──
+  html+='<div class="sec-hdr"><i class="fas fa-gear" style="color:var(--tx3)"></i> Settings</div>';
+  html+='<div class="settings-list">'+
+    '<div class="setting-row" onclick="_changePassword()">'+
+      '<div class="sr-icon"><i class="fas fa-lock"></i></div>'+
+      '<div class="sr-info"><div class="sr-label">Change Password</div><div class="sr-sub">Update your login password</div></div>'+
+      '<i class="fas fa-chevron-right sr-arrow"></i></div>'+
+    '<div class="setting-row" onclick="toggleDark()">'+
+      '<div class="sr-icon"><i class="fas fa-moon"></i></div>'+
+      '<div class="sr-info"><div class="sr-label">Dark Mode</div><div class="sr-sub">Toggle theme</div></div>'+
+      '<div class="sr-toggle" id="dark-toggle"></div></div>'+
+    '</div>';
+
+  // ── Logout ──
+  html+='<button class="btn btn-wide" style="margin-top:20px;background:linear-gradient(135deg,#D51515,#A80F0F);color:#fff;box-shadow:0 4px 14px rgba(213,21,21,.30)" onclick="doLogout()">'+
+    '<i class="fas fa-right-from-bracket"></i> Logout</button>';
+
+  html+='<div style="height:8px"></div>';
+
+  // Update dark toggle state
+  setTimeout(function(){
+    var t=document.getElementById('dark-toggle');
+    if(t)t.classList.toggle('on',document.body.classList.contains('dark'));
+  },0);
+
   return html;
+}
+
+function _profLeave(lbl,ico,col,val){
+  var v=(val===undefined||val===null)?'—':val;
+  return '<div class="prof-leave-item">'+
+    '<div class="prof-leave-ico" style="background:'+col+'1A;color:'+col+'"><i class="fas '+ico+'"></i></div>'+
+    '<div class="prof-leave-val" style="color:'+col+'">'+v+'</div>'+
+    '<div class="prof-leave-lbl">'+lbl+'</div>'+
+    '</div>';
 }
 
 // ── MN ref for date helpers ──
